@@ -1,0 +1,76 @@
+# Changelog
+
+All notable changes to this project are documented here. The format follows
+[Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
+[Semantic Versioning](https://semver.org/).
+
+## [0.1.0] - 2026-09-15
+
+### Added
+
+- CLI `ssr-leak [globs...] [--root] [--all] [--include-client] [--json] [--config] [--fail-on] [--allow-empty]`
+  with exit codes 0 (clean), 1 (findings at or above `--fail-on`), 2 (usage/config error, missing path,
+  empty input set unless `--allow-empty`, unreadable file).
+- Rules:
+  - R1 `axios-defaults-in-function` (high)
+  - R2 `axios-defaults-at-module-scope` (low, `--all` only)
+  - R3 `axios-interceptor-in-request-path` (high)
+  - R4 `module-state-write-tainted` (high when the taint is a request primitive or a parameter of a recognized
+    SSR entry point; medium when the only taint source is a bare parameter of another function)
+  - R5 `module-state-write-untainted` (low, `--all` only)
+  - R6 `global-object-write` (medium)
+- Syntactic taint tracking with provenance: `headers()`, `cookies()`, `draftMode()`, `getServerSession()`,
+  property reads on `req`/`request`/`ctx`/`context`/`params`/`searchParams`/`event`, and parameters of
+  `getServerSideProps`/`getStaticProps`/`getInitialProps` (also when wrapped), exported route handlers
+  (`GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS`), exported `middleware`, `pages/api/**` default exports
+  and `app/**/page|layout|template.*` default exports are request primitives; bare parameters of other
+  functions are weak sources. Propagated through locals, member access, calls, template literals, object/array
+  literals and destructuring.
+- Module init detection: IIFEs, non-exported functions invoked by a top-level statement, and constructors of
+  non-exported classes instantiated by a top-level statement (`new Boot()`).
+- Axios instance recognition: default import, `require('axios')`, `<axios>.create()`, and `create()` when
+  `create` is destructured from `axios` (`import { create }` / `const { create } = require('axios')`).
+- Destructuring assignments to module-level bindings (`[last] = …`, `({ last } = …)`) are detected as writes.
+- File discovery skips `node_modules`, `dist`, `build`, `out`, `.next`, `.vercel`, `.output`, `.turbo`,
+  `.cache`, `.git`, `coverage`, `storybook-static`, `public`, plus minified files (`*.min.js` or any line longer
+  than 2000 characters); overridable with the `exclude` / `include` config keys. Explicitly named paths are always
+  analyzed.
+- `'use client'` files skipped by default (documented as a noise trade-off, not a safety guarantee); test, spec,
+  story and declaration files skipped during discovery.
+- Suppression via `// ssr-leak-ignore-next-line [rules] [-- reason]` and `/* ssr-leak-disable */`.
+- Config file `ssr-leak.config.{json,mjs,js,cjs}` (resolved relative to `--root`) with `ignore`, `exclude`,
+  `include` and `taintSources`.
+- `Report.diagnostics` (`missing-path`, `empty-input`, `unreadable-file`); `run()` never throws for input
+  problems, the CLI prints them as one-line errors and exits 2.
+- Programmatic API: `analyzeSource`, `analyzeFile`, `run`, `shouldFail`, `formatHuman`, `formatJson`,
+  `collectFilesDetailed`, `parseIgnoreRules`, `isMinifiedSource`, `RULES`, `DEFAULT_EXCLUDED_DIRS`.
+- Dual ESM/CJS library build with per-condition type declarations (`import` → `index.d.ts`,
+  `require` → `index.d.cts`), ESM CLI with shebang.
+- `publishConfig.registry` pinned to `https://registry.npmjs.org/`; publishing happens only through the
+  tag-triggered Release workflow.
+
+### Changed (pre-release review, round 1)
+
+- R4 findings whose only taint source is a bare function parameter are `medium` instead of `high`, with the
+  message "Possible per-request write (value comes from a function argument)". R5 is `low` instead of `medium`.
+- Build outputs (`build`, `storybook-static`, `.vercel`, `.output`, `.turbo`, `.cache`, `.git`), `public/` and
+  minified files are no longer scanned by default.
+- An empty input set or a positional path that does not exist exits 2 instead of 0 (`--allow-empty` restores
+  exit 0).
+- `bin` uses `dist/cli.js` without a leading `./` so npm no longer logs a normalizer warning on pack/publish.
+
+### Fixed (pre-release review, round 1)
+
+- CommonJS TypeScript consumers under `moduleResolution: node16` no longer hit TS1479: the `require` export
+  condition points at `dist/index.d.cts`.
+- `// ssr-leak-ignore-next-line R4 -- reason` now suppresses R4; previously the reason disabled the suppression.
+- A class instantiated once at module top level counts as module init for its constructor body (was R1 high).
+- `const { create } = require('axios')` / `import { create } from 'axios'` instances are recognized as axios
+  (were R4/R5 instead of R1/R2).
+- `[x] = …` / `({ x } = …)` assignments to module-level bindings are detected.
+- An unreadable file is reported as a diagnostic with a one-line message and exit 2 instead of a stack trace;
+  `analyzeFile`'s JSDoc matches its behavior; the unused `ModuleBinding.exported` field was removed.
+- README documents the full excluded-directory list, `--config` resolution relative to `--root`, and that
+  `'use client'` components are still server-rendered.
+
+[0.1.0]: https://github.com/changbaebang/ssr-leak/releases/tag/v0.1.0

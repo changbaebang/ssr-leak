@@ -1,0 +1,410 @@
+# ssr-leak
+
+Next.js SSR 요청 사이에 새어 나가는 모듈 스코프 상태를 잡아냅니다.
+
+[English README](./README.md)
+
+## 문제
+
+서버에서 모듈은 **한 번** 평가된 뒤 그 프로세스가 처리하는 **모든 요청**이 공유합니다.
+모듈 스코프에 쓰는 것 — `axios.defaults`, 공유 axios 인스턴스, 파일 최상단의 `let`, 모듈 레벨 `Map` — 은
+다음 요청에서도 그대로 보이며, 그 요청은 다른 사용자의 것일 수 있습니다.
+
+```ts
+// lib/api.ts
+import axios from 'axios';
+
+export async function getServerSideProps(ctx) {
+  // ❌ 요청 A가 자기 토큰을 공유 인스턴스에 씁니다.
+  //    2ms 뒤 도착한 요청 B는 A의 Authorization 헤더로 응답을 받습니다.
+  axios.defaults.headers.common['Authorization'] = `Bearer ${ctx.req.cookies.token}`;
+  const { data } = await axios.get('https://api.acme.test/me');
+  return { props: { data } };
+}
+```
+
+```ts
+// ✅ 요청 데이터는 요청 스코프에 둡니다.
+export async function getServerSideProps(ctx) {
+  const { data } = await axios.get('https://api.acme.test/me', {
+    headers: { Authorization: `Bearer ${ctx.req.cookies.token}` },
+  });
+  return { props: { data } };
+}
+```
+
+이것은 보안 버그(사용자 간 데이터 노출)입니다. 동시 부하에서는 결정적으로 재현되지만, 사용자 한 명·요청 한 개인
+로컬 개발 환경에서는 보이지 않습니다. 이를 겨냥한 주류 린트 규칙이 없어서 `ssr-leak`이라는 작은 정적 검사기를
+만들었습니다.
+
+## 하는 일 / 하지 않는 일
+
+**하는 일**
+
+- **함수 본문 안**(즉 요청마다 실행될 수 있는 코드)에서 일어나는 `<axios>.defaults.*` 쓰기,
+  `<axios>.interceptors.*.use()`, 모듈 레벨 변수·객체·컬렉션 쓰기, `globalThis` / `process.env` 쓰기를 찾습니다.
+- 쓰여지는 값이 요청에서 파생됐는지, 그리고 **오염이 어디서 왔는지**를 추적합니다. 요청 프리미티브(`headers()`,
+  `cookies()`, `req.*`, `getServerSideProps` / 라우트 핸들러 등의 파라미터)에서 왔으면 `high`, 그 밖의 함수의
+  맨 인자(setter, 구독 함수)에서 왔으면 `medium`입니다. 그래서 기본 출력이 짧고 실행 가능한 항목만 남습니다.
+- TypeScript 컴파일러의 파서만 사용합니다(타입 체커·프로젝트 설정 없음): 파일 1만 개를 몇 초에 처리합니다.
+- CLI, 프로그래밍 API, CI용 안정적인 `--json` 형식을 제공합니다.
+
+**하지 않는 일**
+
+- 함수가 SSR 중 실행된다는 것을 증명하지 않습니다. `'use client'`가 없는 모듈은 런타임에 브라우저만 호출하더라도
+  분석됩니다. 그런 모듈은 `ignore` 설정이나 억제 주석을 쓰세요.
+- `'use client'`를 "서버 코드가 아님"으로 취급하지 않습니다. **Client Component도 요청마다 서버에서 렌더링**되므로
+  그 안의 모듈 스코프 쓰기는 다른 파일과 똑같이 누수됩니다. 이런 파일을 기본으로 건너뛰는 이유는 출력을 짧게
+  유지하기 위해서일 뿐입니다(대부분 브라우저 전용 이벤트 핸들러). 안전 보장이 아니라 소음 절충이므로 감사 시와
+  `app/**` 트리에서는 `--include-client`로 실행하세요.
+- 파일 간 값 흐름을 따라가지 않습니다. 다른 모듈에서 만든 공유 인스턴스는 형태(`.defaults.headers`,
+  `.interceptors.request.use`)로만 인식합니다.
+- `eslint-plugin-react-hooks`, `@next/eslint-plugin-next`, 타입 인식 ESLint 규칙을 대체하지 않습니다. 이들은 다른
+  종류의 버그를 잡으며, 어느 것도 "모듈 스코프는 요청 간 공유된다"는 모델을 갖고 있지 않습니다.
+- 모듈 스코프에 저장된 클로저(`handlers.push(() => req.user)`)나, 모듈 스코프에 놓인 클래스 인스턴스를 `this`로
+  변경하는 경우의 누수는 잡지 못합니다.
+
+## 설치 & 사용
+
+```sh
+# 일회성
+npx ssr-leak
+
+# 프로젝트에 추가
+pnpm add -D ssr-leak
+pnpm ssr-leak src app pages lib
+```
+
+기본값: 현재 디렉터리 아래 모든 `*.{ts,tsx,js,jsx,mjs,cjs}`. 다음은 건너뜁니다.
+
+- 어디에 있든 이름이 `node_modules`, `dist`, `build`, `out`, `.next`, `.vercel`, `.output`, `.turbo`, `.cache`,
+  `.git`, `coverage`, `storybook-static`, `public`인 디렉터리(빌드 산출물, 정적 자산, 캐시, VCS 메타데이터) —
+  설정 파일의 `exclude` / `include`로 바꿀 수 있고, 명령줄에 직접 지정한 디렉터리는 항상 탐색합니다;
+- 선언 파일과 테스트/스토리 파일(`*.test.*`, `*.spec.*`, `__tests__/`, `*.stories.*`);
+- 압축(minified) 파일: `*.min.js`, 그리고 한 줄이 2000자를 넘는 파일(직접 지정하거나 `include`에 걸리는 파일은
+  그래도 분석);
+- `'use client'`로 시작하는 파일 — `--include-client`를 주지 않는 한(위 주의 참고).
+
+입력 집합이 비면 오류입니다: 존재하지 않는 경로를 지정했거나 glob이 아무것도 못 찾으면 종료 코드 2를 내서
+잘못 설정된 CI 작업이 조용히 통과하지 못하게 합니다. `--allow-empty`를 주면 대신 0으로 끝납니다.
+
+## CLI 옵션
+
+| 옵션 | 설명 |
+| --- | --- |
+| `[globs...]` | `--root` 기준 glob·디렉터리·파일. `**`, `*`, `?`, `{a,b}` 지원. 디렉터리는 "그 아래 전부"를 뜻합니다. 존재하지 않는 경로는 오류(종료 코드 2). |
+| `--root <dir>` | glob, `--config`, 보고 경로의 기준 디렉터리. 기본: 현재 디렉터리. |
+| `--all` | 낮은 신뢰도 규칙도 보고: R2 `axios-defaults-at-module-scope`, R5 `module-state-write-untainted`. |
+| `--include-client` | 첫 문장이 `'use client'`인 파일도 분석. 감사 시 권장. |
+| `--json` | 기계 판독 출력(아래 참고). |
+| `--config <path>` | 설정 파일. `--root` 기준으로 해석. 기본: `--root`의 `ssr-leak.config.{json,mjs,js,cjs}`(있을 때). |
+| `--fail-on <level>` | `high`(기본), `medium`, `low` 이상 발견이 하나라도 있으면 종료 코드 1; `none`은 절대 실패하지 않음. |
+| `--allow-empty` | 분석한 파일이 없거나 지정한 경로가 없을 때 2 대신 0으로 종료. |
+| `-h, --help` / `-v, --version` | 도움말 / 버전. |
+
+## 규칙
+
+| ID | 이름 | 신뢰도 | 기본 | 잡는 것 |
+| --- | --- | --- | --- | --- |
+| R1 | `axios-defaults-in-function` | high | 켜짐 | 함수 안에서 `<axios>.defaults.*` 대입(또는 `Object.assign`). `<axios>`는 `axios`의 default import, `require('axios')`, `<axios>.create()` 또는 `axios`에서 구조 분해한 `create()`로 초기화된 모듈 레벨 변수, 또는 경로가 `.defaults.headers…`인 import 바인딩. |
+| R2 | `axios-defaults-at-module-scope` | low | `--all` | 같은 쓰기가 모듈 최상단에서 일어남. 요청 단위는 아니고 전역 가변 설정일 뿐. |
+| R3 | `axios-interceptor-in-request-path` | high | 켜짐 | 모듈 초기화도 아니고, React effect도 아니고, 같은 함수에 짝이 되는 `.eject()`도 없는 함수 안에서의 `<axios>.interceptors.request\|response.use()`. |
+| R4 | `module-state-write-tainted` | high / medium | 켜짐 | 함수 안에서: 모듈 레벨 `let`/`var` 재대입(구조 분해 `[x] = …`, `({ x } = …)` 포함), 모듈 레벨 바인딩의 프로퍼티 대입, 모듈 레벨 `Map`/`Set`/`Array`에 `set/add/push/unshift/splice` 호출(또는 `Object.assign(moduleObj, …)`) — 값 **또는 키**가 요청 스코프일 때. 오염이 요청 프리미티브에서 왔으면 `high`; 유일한 소스가 SSR 진입점이 아닌 함수의 맨 파라미터면 `medium`(메시지: *possible per-request write (value comes from a function argument)*). |
+| R5 | `module-state-write-untainted` | low | `--all` | 같은 쓰기인데 값이 요청 스코프가 아님(상수 키 메모 캐시, 카운터). 감사용. |
+| R6 | `global-object-write` | medium | 켜짐 | 함수 안에서 `globalThis.x`, `global.x`, `process.env.X` 대입. 브라우저 호스트 객체(`globalThis.location`, `.document`, …)는 제외. |
+
+`high`와 `medium`은 기본으로 표시되고 `low`는 `--all`일 때만 표시됩니다. `--fail-on` 기본값은 `high`이므로
+`medium` 발견은 보이기는 하지만 `--fail-on medium`으로 선택하기 전까지 CI를 실패시키지 않습니다.
+
+**요청 프리미티브**(R4 `high`): `headers()`, `cookies()`, `draftMode()`, `getServerSession()` 호출(+
+`taintSources.functions`); `req`, `request`, `ctx`, `context`, `params`, `searchParams`, `event`라는 이름의
+식별자에 대한 프로퍼티 읽기(+ `taintSources.identifiers`); 그리고 인식된 SSR 진입점의 파라미터:
+`getServerSideProps`, `getStaticProps`, `getInitialProps`(래핑된 경우 포함: `export const getServerSideProps =
+withAuth(async (ctx) => …)`), export된 `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` 라우트 핸들러,
+export된 `middleware`, `pages/api/**` 파일의 default export, `app/**/page|layout|template.*`에서 파라미터를 받는
+default export 함수.
+
+### 억제
+
+```ts
+// ssr-leak-ignore-next-line
+cache.set(key, value);
+
+// ssr-leak-ignore-next-line R5, module-state-write-tainted   ← 나열한 규칙만
+counter++;
+
+// ssr-leak-ignore-next-line R4 -- browser only               ← "--" 뒤는 사유이며 무시됩니다
+lastScroll = y;
+```
+
+```ts
+/* ssr-leak-disable */   ← 파일 최상단(첫 문장 앞, 디렉티브 뒤)
+```
+
+### 설정 파일
+
+`ssr-leak.config.json`(또는 default export가 있는 `.mjs` / `.js` / `.cjs`):
+
+```json
+{
+  "ignore": ["**/mocks/**", "src/legacy/browser-only/**"],
+  "exclude": ["node_modules", "dist", ".next", "generated"],
+  "include": ["public/sw/**"],
+  "taintSources": {
+    "functions": ["auth", "getToken"],
+    "identifiers": ["nextReq"]
+  }
+}
+```
+
+- `ignore` — `--root` 기준 glob. 일치하는 파일·디렉터리를 건너뜁니다.
+- `exclude` — 어디에 있든 건너뛸 디렉터리 이름. 내장 목록("설치 & 사용" 참고)을 **대체**하므로 계속 원하는
+  항목은 다시 적어야 합니다.
+- `include` — `--root` 기준 glob. 제외 디렉터리 아래에 있거나 압축 파일로 보여도 분석합니다.
+- `taintSources.functions` — 반환값이 요청 스코프인 함수 이름 추가(내장: `headers`, `cookies`, `draftMode`,
+  `getServerSession`).
+- `taintSources.identifiers` — 프로퍼티 읽기가 요청 스코프인 식별자 추가(내장: `req`, `request`, `ctx`,
+  `context`, `params`, `searchParams`, `event`).
+
+## 출력 예시
+
+사람용:
+
+```
+src/pages/profile.tsx:12:3  R1 axios-defaults-in-function [high]  `axios.defaults.headers.common['Authorization']` is assigned inside a function. The axios instance lives at module scope and is shared by every SSR request, so one request's value is served to the next.
+    fix: Create a per-request instance (axios.create({ headers })) or pass headers per call (axios.get(url, { headers })).
+src/lib/session.ts:9:3  R4 module-state-write-tainted [high]  Request-scoped data (from `headers()`) is written into module-level state `cfg.token`. The module is shared across SSR requests, so a different user's request can read it.
+    fix: Keep request data in request scope: return it, pass it as an argument, or use a per-request container (React cache(), AsyncLocalStorage, or a per-request object).
+src/lib/store.ts:4:3  R4 module-state-write-tainted [medium]  Possible per-request write (value comes from a function argument): parameter `next` is written into module-level state `payload`. If this function runs during SSR, the module is shared across requests and a different user's request can read the value.
+    fix: Keep request data in request scope: return it, pass it as an argument, or use a per-request container (React cache(), AsyncLocalStorage, or a per-request object).
+
+3 findings (2 high, 1 medium, 0 low) — 412 files scanned in 180ms
+```
+
+`--json`:
+
+```json
+{
+  "version": "0.1.0",
+  "root": "/work/acme-web",
+  "filesScanned": 412,
+  "durationMs": 180,
+  "findings": [
+    {
+      "file": "src/pages/profile.tsx",
+      "line": 12,
+      "column": 3,
+      "endLine": 12,
+      "endColumn": 78,
+      "ruleId": "R1",
+      "rule": "axios-defaults-in-function",
+      "confidence": "high",
+      "message": "`axios.defaults.headers.common['Authorization']` is assigned inside a function. ...",
+      "fixHint": "Create a per-request instance (axios.create({ headers })) or pass headers per call (axios.get(url, { headers })).",
+      "snippet": "axios.defaults.headers.common['Authorization'] = `Bearer ${token}`;"
+    }
+  ],
+  "summary": { "total": 3, "high": 2, "medium": 1, "low": 0 },
+  "diagnostics": []
+}
+```
+
+`file`은 `root` 기준 상대 경로(`/` 구분자), `line`/`column`은 1부터 시작합니다. `diagnostics`는 입력 문제
+목록입니다(`{ "kind": "missing-path" | "empty-input" | "unreadable-file", "path"?, "message" }`); CLI는 이를
+stderr에도 출력합니다. 형식은 메이저 버전 안에서 안정적이며 필드가 추가될 수는 있습니다.
+
+## 종료 코드
+
+| 코드 | 의미 |
+| --- | --- |
+| 0 | `--fail-on` 이상의 발견 없음 |
+| 1 | `--fail-on`(기본 `high`) 이상의 발견이 하나 이상 |
+| 2 | 사용법 또는 설정 오류(알 수 없는 옵션, 잘못된 `--fail-on`, 잘못되거나 없는 설정 파일); 존재하지 않는 경로 지정 또는 빈 입력 집합(`--allow-empty`가 없을 때); 읽을 수 없는 파일 |
+
+종료 코드 2로 끝나는 오류는 스택 트레이스 없이 stderr에 한 줄로 출력됩니다.
+
+## 프로그래밍 API
+
+```ts
+import { analyzeSource, run, shouldFail } from 'ssr-leak';
+
+// 순수 함수, 소스 텍스트 하나. 파일 이름이 파서(ts / tsx / js / jsx)를 결정합니다.
+const findings = analyzeSource(code, 'app/page.tsx', { all: false, includeClient: false });
+
+// root 아래 파일을 찾고 ssr-leak.config.*를 적용해 전부 분석합니다.
+const report = await run({
+  root: process.cwd(),
+  patterns: ['src', 'app'],
+  all: false,
+  includeClient: false,
+  config: { ignore: ['**/mocks/**'] }, // 경로(root 기준)도 가능; 생략하면 자동 탐색
+  taintSources: { functions: ['auth'] },
+});
+
+if (report.diagnostics.length > 0) process.exitCode = 2; // 없는 경로, 빈 입력, 읽을 수 없는 파일
+else process.exitCode = shouldFail(report.findings, 'high') ? 1 : 0;
+```
+
+`run()`은 입력 문제로 throw하지 않고 `report.diagnostics`에 담아 돌려줍니다. `analyzeFile(file, options)`은
+파일 하나를 분석하며, 읽을 수 없으면 `fs.readFileSync`처럼 throw합니다.
+
+이 밖에 `analyzeFile`, `collectFiles`, `collectFilesDetailed`, `formatHuman`, `formatJson`, `summarize`,
+`parseIgnoreRules`, `isMinifiedSource`, `RULES`, `RULE_LIST`, `validateConfig`, `loadConfigFile`,
+`DEFAULT_EXCLUDED_DIRS`, `DEFAULT_TAINT_FUNCTIONS`, `DEFAULT_TAINT_IDENTIFIERS`, `VERSION`과 타입
+`Finding`, `Report`, `Diagnostic`, `RunOptions`, `AnalyzeOptions`, `Config`, `RuleId`, `Confidence`, `Taint`를
+export합니다. CLI는 `run()`의 얇은 래퍼입니다.
+
+패키지는 ESM과 CommonJS 빌드를 각각 맞는 선언 파일과 함께 제공합니다(`import`는 `dist/index.d.ts`,
+`require`는 `dist/index.d.cts`로 해석). 따라서 `moduleResolution: node16` / `bundler`의 TypeScript 소비자가 두
+모듈 시스템 모두에서 동작합니다.
+
+## 동작 원리
+
+전부 구문 분석 + 작은 바인더입니다. 타입 체커, `tsconfig`, 파일 간 해석은 없습니다.
+
+1. **파싱**: `ts.createSourceFile`(확장자로 스크립트 종류 결정; `.js`/`.mjs`/`.cjs`는 JS, `.jsx`/`.tsx`는 JSX).
+2. **파일 게이트**: 첫 문장 앞에 `ssr-leak-disable` 주석이 있거나, 디렉티브 프롤로그에 `'use client'`가 있으면
+   (`--include-client`가 아닌 한) 건너뜁니다 — Client Component도 서버에서 렌더링되므로 이 게이트는 소음만
+   줄입니다. 테스트·스토리 파일, 제외 디렉터리, 압축 파일은 탐색 단계에서 빠집니다.
+3. **모듈 스코프**: 최상위 문장을 순회하며 모든 바인딩을 기록합니다: import(`axios`인지, `axios`의 `create`인지
+   포함), `const`/`let`/`var`(초기화식의 형태: `new Map()`, `[]`, `{}`, `<axios>.create()`, `create()`,
+   `require()`), 함수, 클래스, enum. 또 최상위 문장이 **직접 호출하는 함수**와 **인스턴스화하는 클래스**의 이름을
+   기록합니다.
+4. **함수 스코프**: 함수형 노드(선언, 표현식, 화살표, 메서드, 접근자, 생성자)마다 파라미터 이름, 본문에서 선언된
+   이름, 각 로컬에 대입된 모든 표현식(초기화식, `=`, 구조 분해, `for…of` 소스)을 가진 스코프를 만듭니다. 블록은
+   따로 모델링하지 않아, 함수 본문 어디서든 선언된 이름은 그 함수의 로컬입니다. 이 부정확함은 발견을 **줄이는**
+   방향입니다. 스코프에는 그 함수가 인식된 SSR 진입점인지도 기록합니다.
+5. **이름 해석**: 식별자는 가장 안쪽 함수 스코프부터 바깥으로, 다음 모듈 스코프, 아니면 "미해석"(`globalThis`,
+   `process`, `Object`, 선언되지 않은 전역)으로 해석합니다.
+6. **요청 경로**: 노드를 감싸는 함수가 하나 이상 있고, 그중 어느 것도 *모듈 초기화*가 아닐 때 "요청 경로에
+   있다"고 봅니다. 모듈 초기화 = 모듈 스코프의 IIFE, 최상위 문장이 직접 호출하는 export되지 않은 함수, 또는
+   최상위 문장이 인스턴스화하는 export되지 않은 클래스의 생성자(`const boot = new Boot()`).
+   `useEffect` / `useLayoutEffect` / `useInsertionEffect` 콜백 안의 코드는 검사하지 않습니다 — effect는 SSR 중
+   실행되지 않기 때문입니다.
+7. **쓰기**: 모든 대입(`=`, `+=`, …, 구조 분해 대상 포함), `++`/`--`, `Object.assign(target, …)`, 변경 호출
+   (`set/add/push/unshift/splice/clear/delete/pop/shift`)에 대해 대상의 루트 식별자와 프로퍼티 체인을 해석해
+   분류합니다: axios defaults → R1/R2; `globalThis`/`global`/`process.env` → R6; 모듈 레벨 바인딩 → R4/R5
+   (재대입은 `let`/`var`만; 변경 호출은 바인딩이 `Map`/`Set`/`Array` 리터럴·생성자로 초기화된 경우만 — 그래서
+   import한 `router`의 `router.push(url)`은 발견이 아닙니다).
+8. **오염(taint)**: 흐름 비민감. 표현식이 다음이면 요청 스코프입니다: *어떤* 바깥 함수의 파라미터, 오염 소스
+   함수 호출(`headers()`, `cookies()`, `draftMode()`, `getServerSession()` + 설정), 모듈 레벨 바인딩이 아닌 오염
+   식별자(`req`, `ctx`, `params`, … + 설정)의 프로퍼티 읽기, 또는 오염된 것으로 만들어진 값: 로컬 변수(그 로컬에
+   대입된 어떤 값이든), 멤버 접근, 수신자나 **인자 중 하나라도** 오염된 호출, `await`, `as`, 템플릿 리터럴,
+   이항/조건 표현식, 객체/배열 리터럴, `new`. 함수·클래스 표현식은 절대 오염되지 않습니다. 각 오염은
+   **출처**를 갖습니다: 요청 프리미티브(오염 소스 호출, 오염 식별자, SSR 진입점의 파라미터)가 맨 파라미터보다
+   우선하며 R4의 신뢰도가 이를 따릅니다(`high` vs `medium`).
+9. **억제**는 발견을 기록하기 전에 해당 줄에서 확인하고(`-- 사유` 접미사는 무시), 낮은 신뢰도 발견은 `--all`이
+   아니면 버립니다.
+
+### 설계 선택
+
+의도된 결정들입니다. 여러분의 코드베이스에 맞는지 판단할 수 있도록 여기 적어 둡니다.
+
+- **R4 신뢰도는 오염 출처를 따릅니다.** 값이 요청 프리미티브 또는 인식된 SSR 진입점의 파라미터("규칙" 아래 목록)에서
+  왔을 때만 `high`입니다. 유일한 오염이 다른 함수의 맨 파라미터인 쓰기 — setter(`set(next) { payload = next }`),
+  구독(`listeners.add(listener)`), DI setter, 인자를 키로 쓰는 메모 캐시 — 는 `medium`입니다. 그 함수가 SSR 중
+  실행되는지 도구가 알 수 없기 때문입니다. 기본으로 표시되며 `--fail-on medium`으로 실패시킬 수 있습니다. 그에 따라
+  R5(오염되지 않은 쓰기)는 `low`, R2는 `low` 유지, R6은 `medium` 유지입니다.
+- **빌드 산출물, 정적 자산, 압축 코드는 기본으로 건너뜁니다**("설치 & 사용"의 디렉터리 목록, `*.min.js`, 2000자
+  넘는 줄). 압축 번들은 의미 없는 발견을 수백 개 만들고 정적 자산은 SSR 모듈이 아닙니다. `exclude` / `include`로
+  바꿀 수 있습니다.
+- **최상위 문장이 한 번 인스턴스화하는 클래스는 생성자 본문에 한해 모듈 초기화**입니다. 최상위 호출 함수 규칙과
+  일관됩니다: `class Boot { constructor() { axios.defaults.baseURL = … } } new Boot();`는 R1이 아니라 R2(`--all`)
+  입니다. export된 클래스는 여전히 요청 경로 후보입니다.
+- **`'use client'` 파일은 안전이 아니라 소음 때문에 건너뜁니다** — "하지 않는 일" 참고. 감사에는 `--include-client`.
+- **억제 주석은 사유를 받습니다**: ` -- ` 뒤는 전부 무시됩니다.
+- **`axios`에서 구조 분해한 `create`**(`import { create } from 'axios'`, `const { create } = require('axios')`)로 만든
+  인스턴스는 axios로 인식되어 `.defaults` 쓰기가 R1/R2입니다.
+- **모듈 레벨 바인딩에 대한 구조 분해 대입**(`[last] = …`, `({ last } = …)`)은 쓰기입니다.
+- **입력 문제는 종료 코드 2**(없는 경로, 빈 입력 집합, 읽을 수 없는 파일)이며 스택 트레이스 없이 한 줄 메시지를
+  냅니다. `--allow-empty`는 앞의 둘을 경고로 바꿉니다. `run()`은 이를 `diagnostics`로 돌려줍니다.
+- **R1은 import 바인딩의 `.defaults.headers…`에 대해 발동합니다.** import가 axios라고 증명되지 않아도 그 형태의
+  모듈 레벨 HTTP 클라이언트가 바로 이 규칙의 대상이며, 경로가 충분히 특징적입니다.
+- **React effect 콜백 안과 모듈 초기화 함수 안에서는 모든 규칙을 건너뜁니다.** 비용: 초기화 IIFE 안에서 등록되는
+  핸들러(`app.use(...)`)와, 최상위에서도 호출되고 요청마다도 호출되는 함수는 놓칩니다.
+- **`*.stories.*` 파일은 테스트처럼 건너뜁니다**: Storybook 스토리는 Next.js가 서버 렌더링하지 않습니다.
+- **`--config`는 `--root` 기준으로 해석합니다**. 위치 인자 glob과 같습니다.
+- **직접 지정한 경로가 우선합니다**: 명령줄에 준 파일·디렉터리는 이름이 제외 목록에 있거나 압축 파일로 보여도
+  분석합니다.
+
+### 오탐을 줄이는 선택(과 그 비용)
+
+- 최상위에서 호출되는 export되지 않은 함수(또는 거기서 인스턴스화되는 클래스)는 모듈 초기화로 봅니다(R1은 R2가
+  되고, R3/R4/R6은 보고하지 않음). 비용: 같은 함수가 다른 곳에서 요청마다 호출되면 놓칩니다.
+- 바깥에 모듈 초기화 함수나 effect 콜백이 하나라도 있으면 서브트리 전체가 요청 경로가 아닙니다 — 초기화 IIFE
+  안의 `app.use(...)`에 넘긴 콜백도 포함. 비용: 그 핸들러는 놓칩니다.
+- axios임이 증명되지 않는 바인딩의 `.defaults.*`는 R1이 아니라 R4(오염 시) 또는 R5입니다 — 단 import 바인딩의
+  특징적인 `.defaults.headers…` 경로는 R1입니다.
+- 변경 호출 감지는 리터럴 컬렉션 초기화식을 요구합니다. 팩토리가 반환한 `Map`은 놓칩니다.
+- `globalThis.location`, `.document`, `.window`, `.navigator`, `.history`, `.localStorage`, `.sessionStorage` 등
+  브라우저 호스트 객체는 R6에서 제외합니다.
+- 맨 오염 식별자(`req`, `params`, …)는 모듈 레벨 바인딩이 아닐 때만 오염으로 보므로, 모듈 레벨
+  `const context = createContext()`는 오염 소스가 아닙니다. 함수 로컬 `const params = …`는 이름만으로 오염으로
+  **취급됩니다**. 요청 데이터가 아니면 이름을 바꾸거나 억제하세요.
+
+### 알려진 오탐
+
+- **setter, 구독, DI setter, 인자 키 메모 캐시**(`set(next) { payload = next }`, `listeners.add(listener)`,
+  `setHeaderProvider(p) { provider = p }`, `iconCache.set(icon, …)`, `inFlight.set(userId, promise)`): R4 `medium`으로
+  보고됩니다. 대부분 브라우저 전용이거나 의도된 프로세스 전역 상태지만 도구는 누가 호출하는지 볼 수 없습니다.
+  한 번 검토한 뒤 사유와 함께 억제하거나 넘어가세요 — 기본 `--fail-on high`에서는 CI를 실패시키지 않습니다.
+- **`'use client'`가 없는 컴포넌트의 `useCallback` / 이벤트 핸들러 본문**: 위와 같습니다 — 콜백 안에서 컴포넌트
+  prop을 모듈 스코프에 쓰면 그 콜백이 SSR 중 실행되지 않더라도 R4 `medium`입니다.
+- **Pages Router의 브라우저 전용 모듈**(`'use client'` 디렉티브가 없음): 스크롤 위치나 popstate 리스너를 모듈
+  스코프에 두는 모듈은 브라우저만 호출해도 R4로 잡힙니다. `ignore`에 추가하거나 억제 주석을 쓰세요.
+- **목 서버**(모듈 레벨 스토어를 두고 `request`로부터 쓰는 MSW 핸들러). 엄밀히는 요청 간 스토어입니다. 개발
+  전용이면 `**/mocks/**`를 `ignore`에 추가하세요.
+- **보수적인 호출 전파**: `cache.set(key, expensive(params.id))`는 `expensive()`가 요청과 무관한 값을 반환해도
+  인자를 통해 오염됩니다.
+- **요청 프리미티브와 같은 이름의 함수 로컬 변수**(`const params = new URLSearchParams(…)`)는 이름만으로
+  오염됩니다.
+
+### 알려진 미탐
+
+- **다른 모듈**을 거치는 값(싱글턴 클래스, setter를 가진 `store` 모듈) — 쓰기 지점이 분석 파일 안에 구문적으로
+  보이지 않는 한.
+- 요청 데이터를 캡처해 모듈 스코프에 저장된 **클로저**.
+- 클래스 메서드에서 `this`로, 또는 별칭으로 변경되는 모듈 레벨 상태(`const c = cache; c.set(...)`는 `c` 자체가
+  모듈 레벨일 때만 추적).
+- 최상위 `app.use(...)` / 서버 프레임워크 등록에 넘긴 함수 안의 쓰기(초기화로 취급).
+- 나중에 대입되는 모듈 레벨 `let`에 든 axios 인스턴스(`let client; function init() { client = axios.create() }`).
+- 모듈 최상위에서 호출되면서 **동시에** 다른 모듈에서 요청마다 호출되는 함수(또는 클래스 생성자).
+- `--include-client`를 주지 않은 `'use client'` 파일.
+- 제외 디렉터리 아래 또는 압축 파일 안의 모든 것(`include`로 다시 포함하지 않는 한).
+
+## 로드맵
+
+- 같은 규칙·같은 ID를 노출하는 ESLint 플러그인(`eslint-plugin-ssr-leak`).
+- 타입으로 axios 인스턴스와 컬렉션을 인식하는 선택적 타입 인식 모드(project service).
+- export된 setter를 가진 `store` 스타일 모듈의 파일 간 오염 추적.
+- 모듈 스코프에 저장된 클로저 / 클래스 인스턴스 규칙.
+- `useCallback` 본문과 JSX `on*` prop에 넘긴 함수를 모든 규칙에서 면제(SSR 중 실행되지 않음).
+- 탐색 단계의 선택적 `.gitignore` 인식.
+- SARIF 출력.
+
+## 개발 & 릴리스
+
+```sh
+pnpm install
+pnpm build          # tsup: dist/index.{js,cjs,d.ts,d.cts}, dist/cli.js (ESM, shebang)
+pnpm test           # 먼저 빌드한 뒤 vitest (CLI e2e 테스트가 dist/cli.js를 실행)
+pnpm lint           # biome
+pnpm typecheck      # tsc --noEmit
+npm pack --dry-run  # 배포 파일 목록 확인
+```
+
+릴리스: `package.json`과 `CHANGELOG.md`의 `version`을 올리고 커밋한 뒤
+
+```sh
+git tag vX.Y.Z
+git push origin vX.Y.Z
+```
+
+`Release` GitHub Action이 빌드·테스트 후 저장소 시크릿 `NPM_TOKEN`으로
+`npm publish --provenance --access public`을 실행합니다. **배포는 이 태그 → GitHub Actions 흐름으로만 하고,
+로컬에서 `npm publish`를 실행하지 마세요.** `publishConfig.registry`가 `https://registry.npmjs.org/`로 고정되어
+있어 사설 레지스트리를 가리키는 로컬 `~/.npmrc`가 실수로 한 배포를 다른 곳으로 보내지 못합니다.
+
+## 라이선스
+
+MIT
