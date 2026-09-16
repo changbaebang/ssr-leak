@@ -434,6 +434,8 @@ git push origin vX.Y.Z
 `npm publish --provenance --access public`을 실행합니다. **배포는 이 태그 → GitHub Actions 흐름으로만 하고,
 로컬에서 `npm publish`를 실행하지 마세요.** `publishConfig.registry`가 `https://registry.npmjs.org/`로 고정되어
 있어 사설 레지스트리를 가리키는 로컬 `~/.npmrc`가 실수로 한 배포를 다른 곳으로 보내지 못합니다.
+`v*` 태그는 저장소 ruleset으로 보호되어 저장소 admin만 만들 수 있으므로, 협업자의 write 권한으로는 릴리스를
+트리거할 수 없습니다.
 
 ## 라이선스
 

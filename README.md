@@ -450,6 +450,8 @@ The `Release` GitHub Action builds, tests, and runs `npm publish --provenance --
 `NPM_TOKEN` repository secret. **Publish only through this tag → GitHub Actions flow; never run `npm publish`
 locally.** `publishConfig.registry` is pinned to `https://registry.npmjs.org/` so a local `~/.npmrc` pointing at
 a private registry cannot redirect an accidental publish.
+`v*` tags are protected by a repository ruleset: only the repository admin can create them, so a collaborator's
+write access cannot trigger a release.
 
 ## License
 
