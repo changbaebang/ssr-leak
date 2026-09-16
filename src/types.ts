@@ -28,6 +28,14 @@ export interface TaintSources {
   identifiers?: string[];
 }
 
+/** Names of runtime checks the analyzer treats as browser/server guards, merged with the built-ins. */
+export interface GuardSources {
+  /** Functions or identifiers that are truthy only on the server (built-in: `isServer`, `isSSR`, `isServerSide`). */
+  server?: string[];
+  /** Functions or identifiers that are truthy only in a browser (built-in: `isClient`, `isBrowser`, `isClientSide`, `canUseDOM`). */
+  client?: string[];
+}
+
 export interface Config {
   /** Glob patterns (relative to root) of files to skip. */
   ignore?: string[];
@@ -43,6 +51,8 @@ export interface Config {
   include?: string[];
   /** Additional taint sources merged with the built-in ones. */
   taintSources?: TaintSources;
+  /** Additional browser/server guard names merged with the built-in ones. */
+  guards?: GuardSources;
 }
 
 export interface AnalyzeOptions {
@@ -52,6 +62,8 @@ export interface AnalyzeOptions {
   includeClient?: boolean;
   /** Extra taint sources merged with the built-in ones. */
   taintSources?: TaintSources;
+  /** Extra browser/server guard names merged with the built-in ones. */
+  guards?: GuardSources;
 }
 
 export interface RunOptions extends AnalyzeOptions {

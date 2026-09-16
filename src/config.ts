@@ -1,7 +1,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
-import { type Config, ConfigError, type TaintSources } from './types.js';
+import { type Config, ConfigError, type GuardSources, type TaintSources } from './types.js';
 
 export const CONFIG_FILE_NAMES: readonly string[] = [
   'ssr-leak.config.json',
@@ -23,7 +23,7 @@ export function validateConfig(raw: unknown, source = 'config'): Config {
   if (!isObject(raw)) throw new ConfigError(`${source}: expected an object`);
   const config: Config = {};
   const unknownKeys = Object.keys(raw).filter(
-    (k) => !['ignore', 'exclude', 'include', 'taintSources'].includes(k),
+    (k) => !['ignore', 'exclude', 'include', 'taintSources', 'guards'].includes(k),
   );
   if (unknownKeys.length > 0) {
     throw new ConfigError(`${source}: unknown key(s) ${unknownKeys.join(', ')}`);
@@ -53,6 +53,19 @@ export function validateConfig(raw: unknown, source = 'config'): Config {
       ts.identifiers = identifiers;
     }
     config.taintSources = ts;
+  }
+  if (raw.guards !== undefined) {
+    if (!isObject(raw.guards)) throw new ConfigError(`${source}: "guards" must be an object`);
+    const guards: GuardSources = {};
+    for (const key of ['server', 'client'] as const) {
+      const value = raw.guards[key];
+      if (value === undefined) continue;
+      if (!isStringArray(value)) {
+        throw new ConfigError(`${source}: "guards.${key}" must be string[]`);
+      }
+      guards[key] = value;
+    }
+    config.guards = guards;
   }
   return config;
 }

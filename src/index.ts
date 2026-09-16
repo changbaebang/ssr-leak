@@ -13,6 +13,14 @@ export {
   isMinifiedSource,
 } from './files.js';
 export { formatHuman, formatJson } from './format.js';
+export {
+  DEFAULT_CLIENT_GUARDS,
+  DEFAULT_SERVER_GUARDS,
+  type GuardNames,
+  type RuntimeEnv,
+  buildGuardNames,
+  classifyCondition,
+} from './guards.js';
 export { CONFIDENCE_RANK, RULES, RULE_LIST, type RuleMeta } from './rules.js';
 export { analyzeFile, run, shouldFail, summarize } from './run.js';
 export { parseIgnoreRules } from './suppress.js';
@@ -25,6 +33,7 @@ export {
   type Diagnostic,
   type DiagnosticKind,
   type Finding,
+  type GuardSources,
   type Report,
   type ReportSummary,
   type RuleId,

@@ -119,11 +119,13 @@ describe('file discovery', () => {
       config: { exclude: ['node_modules'] },
     });
     expect(replaced.findings.map((f) => f.file)).toEqual([
+      'discovery/__mocks__/api.ts',
       'discovery/.cache/bundle.js',
       'discovery/.output/bundle.js',
       'discovery/.turbo/bundle.js',
       'discovery/.vercel/bundle.js',
       'discovery/build/bundle.js',
+      'discovery/mocks/handler.ts',
       'discovery/public/bundle.js',
       'discovery/src/ok.js',
       'discovery/storybook-static/bundle.js',

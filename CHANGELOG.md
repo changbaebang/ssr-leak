@@ -4,6 +4,30 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- Browser-only guard recognition: writes that can only run in a browser are reported at `low` (visible with
+  `--all`, with a note in the message) instead of their normal confidence. Recognized within the same function:
+  statements after `if (isServer()) return;` / `throw` in the same block, the then-branch of
+  `if (typeof window !== 'undefined')`, the else-branch of `if (typeof window === 'undefined')`, the right side of
+  `isClient() && …` / `isServer() || …`, and the matching arm of a ternary. Conditions use three-valued logic
+  (`isServer() || flag` is a guard, `isServer() && flag` is not). Atoms: `typeof window|document` (also via
+  `globalThis.`) vs `'undefined'` / `'object'` — `navigator` and `self` are deliberately not guards because
+  Node 21+ and Bun define `navigator`, and Deno and edge runtimes may also define `self` — `!x`, and calls or identifiers named `isServer`,
+  `isSSR`, `isServerSide` (server) or `isClient`, `isBrowser`, `isClientSide`, `canUseDOM` (client), matched by
+  the last name of the callee.
+- Config key `guards: { server?: string[]; client?: string[] }` (and `AnalyzeOptions.guards`) to add guard names.
+- Programmatic exports `classifyCondition`, `buildGuardNames`, `DEFAULT_SERVER_GUARDS`, `DEFAULT_CLIENT_GUARDS`.
+
+### Changed
+
+- Discovery skips `mocks/` and `__mocks__/` directories and `*.mock.*` files by default (MSW and Jest handlers
+  keep module-level stores by design). Name them explicitly or use `include` to analyze them.
+- `include` now overrides the test/story/mock filename skip as well as excluded directories and minified names;
+  previously `*.test.*` / `*.stories.*` could only be analyzed by naming the file explicitly.
+
 ## [0.1.0] - 2026-09-15
 
 ### Added

@@ -79,10 +79,10 @@ pnpm ssr-leak src app pages lib
 Default: every `*.{ts,tsx,js,jsx,mjs,cjs}` under the current directory, skipping
 
 - directories named `node_modules`, `dist`, `build`, `out`, `.next`, `.vercel`, `.output`, `.turbo`, `.cache`,
-  `.git`, `coverage`, `storybook-static`, `public` wherever they appear (build outputs, static assets, caches, VCS
-  metadata) — override with `exclude` / `include` in the config file; a directory you name explicitly on the
-  command line is always walked;
-- declaration files and test/story files (`*.test.*`, `*.spec.*`, `__tests__/`, `*.stories.*`);
+  `.git`, `coverage`, `storybook-static`, `public`, `mocks`, `__mocks__` wherever they appear (build outputs,
+  static assets, caches, VCS metadata, mock handlers) — override with `exclude` / `include` in the config file; a
+  directory you name explicitly on the command line is always walked;
+- declaration files and test/story/mock files (`*.test.*`, `*.spec.*`, `__tests__/`, `*.stories.*`, `*.mock.*`);
 - minified files: `*.min.js` and any file with a line longer than 2000 characters (a file you name explicitly or
   match with `include` is analyzed anyway);
 - files that start with `'use client'`, unless `--include-client` is given (see the caveat above).
@@ -155,6 +155,10 @@ lastScroll = y;
   "taintSources": {
     "functions": ["auth", "getToken"],
     "identifiers": ["nextReq"]
+  },
+  "guards": {
+    "server": ["isNodeRuntime"],
+    "client": ["inBrowser"]
   }
 }
 ```
@@ -162,12 +166,18 @@ lastScroll = y;
 - `ignore` — globs relative to `--root`; matching files and directories are skipped.
 - `exclude` — directory basenames skipped wherever they appear. **Replaces** the built-in list (see
   "Install & usage"), so repeat the entries you still want.
-- `include` — globs relative to `--root` that are analyzed even when they sit under an excluded directory or look
-  minified.
+- `include` — globs relative to `--root` that are analyzed even when they sit under an excluded directory, are
+  named like a test/story/mock file (`*.test.*`, `*.stories.*`, `*.mock.*`, `__tests__/`), or look minified.
 - `taintSources.functions` — extra function names whose return value is request-scoped (built-in:
   `headers`, `cookies`, `draftMode`, `getServerSession`).
 - `taintSources.identifiers` — extra identifiers whose property reads are request-scoped (built-in:
   `req`, `request`, `ctx`, `context`, `params`, `searchParams`, `event`).
+- `guards.server` — extra functions or identifiers that are truthy only on the server, used to recognize
+  browser-only code (built-in: `isServer`, `isSSR`, `isServerSide`). Matched by the last name of the callee, so
+  `runtime.isServer()` counts.
+- `guards.client` — the browser-side counterparts (built-in: `isClient`, `isBrowser`, `isClientSide`,
+  `canUseDOM`). `typeof window !== 'undefined'` / `typeof document` are always recognized; `navigator` and `self`
+  are not (`navigator` exists in Node 21+, `self` in Deno and edge runtimes).
 
 ## Output example
 
@@ -287,6 +297,18 @@ Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no 
    statement invokes directly, or the constructor of a non-exported class that a top-level statement instantiates
    (`const boot = new Boot()`). Code inside `useEffect` / `useLayoutEffect` / `useInsertionEffect` callbacks is
    never checked, because effects do not run during SSR.
+   **Browser-only guards.** A write that can only execute in a browser is reported at `low` (visible with
+   `--all`, with a note in the message) instead of its normal confidence. Recognized shapes, all within the
+   same function: everything after `if (isServer()) return;` (or `throw`) in the same block; the then-branch of
+   `if (typeof window !== 'undefined')`; the else-branch of `if (typeof window === 'undefined')`; the right side of
+   `isClient() && …` / `isServer() || …`; the matching arm of a ternary. Conditions use three-valued logic on
+   "what is this during SSR": `isServer() || flag` is still a server guard (true on the server whatever `flag`
+   is), `isServer() && flag` is not. Recognized atoms: `typeof window|document` (also via
+   `globalThis.`) compared with `'undefined'` / `'object'`, `!x`, and calls or identifiers whose last name is in
+   the built-in or configured `guards` lists. `typeof navigator` and `typeof self` are **not** guards: Node 21+ (and Bun)
+   define `navigator`, while Deno and the edge runtimes may also define `self`; neither is universally
+   browser-only, so a write behind them can run during SSR. A guard in a
+   *different* function (`ensureBrowser()` called at the top) is not followed.
 7. **Writes.** For every assignment (`=`, `+=`, …, including destructuring targets), `++`/`--`,
    `Object.assign(target, …)`, and mutating call (`set/add/push/unshift/splice/clear/delete/pop/shift`), resolve
    the target's root identifier and property chain and classify: axios defaults → R1/R2;
@@ -353,6 +375,13 @@ These are deliberate and documented here so you can decide whether they fit your
 - A bare taint identifier (`req`, `params`, …) is tainted only when it is not a module-level binding, so a
   module-level `const context = createContext()` is not a taint source. A function-local `const params = …`
   **is** treated as tainted by name; rename it or suppress if it is not request data.
+- Writes behind a browser-only guard (`typeof window !== 'undefined'`, `if (isServer()) return;`, …) are
+  downgraded to `low`, not dropped, so `--all` still lists them for audits. Cost: a guard whose name is not in
+  `guards` (or that lives in another function) is not seen, and a guard that is *wrong* (e.g. a `canUseDOM`
+  that is computed once at module load in a test environment) is trusted.
+- `mocks/`, `__mocks__/` and `*.mock.*` are skipped by default (MSW and Jest handlers keep module-level stores
+  by design). Name the path explicitly or list it in `include` to analyze it; `include` overrides every default
+  skip.
 
 ### Known false positives
 
@@ -364,10 +393,11 @@ These are deliberate and documented here so you can decide whether they fit your
 - **`useCallback` / event-handler bodies** in components without `'use client'`: same as above — a component prop
   written into module scope inside a callback is R4 `medium`, although the callback never runs during SSR.
 - **Browser-only modules in the Pages Router** (no `'use client'` directive exists there): a module that stores
-  scroll positions or popstate listeners at module scope is flagged as R4 even if only the browser calls it.
-  Add it to `ignore` or use a suppression comment.
-- **Mock servers** (MSW handlers that keep a module-level store, written from `request`). Technically a
-  cross-request store; add `**/mocks/**` to `ignore` if they are dev-only.
+  scroll positions or popstate listeners at module scope is flagged as R4 even if only the browser calls it and
+  the function itself has no guard (the guard sits in a helper it calls, or in the caller). Add a guard to the
+  function, add it to `ignore`, or use a suppression comment.
+- **Mock servers outside the default directories** (an MSW handler under `src/api/fake/`): technically a
+  cross-request store; add the path to `ignore` or `exclude` if it is dev-only.
 - **Conservative call propagation**: `cache.set(key, expensive(params.id))` is tainted through the argument even
   when `expensive()` returns something request-independent.
 - **A function-local variable named like a request primitive** (`const params = new URLSearchParams(…)`) is
@@ -393,6 +423,8 @@ These are deliberate and documented here so you can decide whether they fit your
 - Cross-file taint for `store`-style modules with exported setters.
 - Rule for closures / class instances stored at module scope.
 - Exempt `useCallback` bodies and functions passed as JSX `on*` props from all rules (they never run during SSR).
+- Follow browser-only guards across functions (`ensureBrowser()` helpers, guarded callers) — today a guard only
+  covers its own function.
 - Opt-in `.gitignore` awareness during discovery.
 - SARIF output.
 

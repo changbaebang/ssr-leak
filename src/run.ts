@@ -9,6 +9,7 @@ import type {
   Confidence,
   Diagnostic,
   Finding,
+  GuardSources,
   Report,
   RunOptions,
   TaintSources,
@@ -20,12 +21,18 @@ function mergeSources(a: string[] | undefined, b: string[] | undefined): string[
   return [...new Set([...(a ?? []), ...(b ?? [])])];
 }
 
-function toAnalyzeOptions(options: RunOptions, taintSources?: TaintSources): AnalyzeOptions {
+function toAnalyzeOptions(
+  options: RunOptions,
+  taintSources?: TaintSources,
+  guards?: GuardSources,
+): AnalyzeOptions {
   const out: AnalyzeOptions = {};
   if (options.all !== undefined) out.all = options.all;
   if (options.includeClient !== undefined) out.includeClient = options.includeClient;
   const sources = taintSources ?? options.taintSources;
   if (sources) out.taintSources = sources;
+  const guardNames = guards ?? options.guards;
+  if (guardNames) out.guards = guardNames;
   return out;
 }
 
@@ -60,7 +67,12 @@ export async function run(options: RunOptions = {}): Promise<Report> {
   const taintSources: TaintSources | undefined = functions || identifiers ? {} : undefined;
   if (taintSources && functions) taintSources.functions = functions;
   if (taintSources && identifiers) taintSources.identifiers = identifiers;
-  const analyzeOptions = toAnalyzeOptions(options, taintSources);
+  const guardServer = mergeSources(config.guards?.server, options.guards?.server);
+  const guardClient = mergeSources(config.guards?.client, options.guards?.client);
+  const guards: GuardSources | undefined = guardServer || guardClient ? {} : undefined;
+  if (guards && guardServer) guards.server = guardServer;
+  if (guards && guardClient) guards.client = guardClient;
+  const analyzeOptions = toAnalyzeOptions(options, taintSources, guards);
 
   const patterns =
     options.patterns && options.patterns.length > 0 ? options.patterns : [DEFAULT_PATTERN];

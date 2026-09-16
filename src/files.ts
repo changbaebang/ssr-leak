@@ -15,7 +15,7 @@ export const DEFAULT_PATTERN = '**/*.{ts,tsx,js,jsx,mjs,cjs}';
 
 /**
  * Directory basenames skipped wherever they appear: package installs, build outputs, static
- * assets, caches and VCS metadata. Override with the `exclude` config key; re-include single paths
+ * assets, caches, VCS metadata and mock handlers (MSW `mocks/`, Jest `__mocks__/`). Override with the `exclude` config key; re-include single paths
  * with `include`.
  */
 export const DEFAULT_EXCLUDED_DIRS: readonly string[] = [
@@ -32,6 +32,8 @@ export const DEFAULT_EXCLUDED_DIRS: readonly string[] = [
   'coverage',
   'storybook-static',
   'public',
+  'mocks',
+  '__mocks__',
 ];
 
 export const EXCLUDED_DIRS: ReadonlySet<string> = new Set(DEFAULT_EXCLUDED_DIRS);
@@ -39,7 +41,7 @@ export const EXCLUDED_DIRS: ReadonlySet<string> = new Set(DEFAULT_EXCLUDED_DIRS)
 /** A source line longer than this marks the file as minified and it is skipped. */
 export const MAX_LINE_LENGTH = 2000;
 
-const TEST_FILE = /(^|[\\/])__tests__[\\/]|\.(test|spec|stories)\.[cm]?[jt]sx?$/;
+const TEST_FILE = /(^|[\\/])__tests__[\\/]|\.(test|spec|stories|mock)\.[cm]?[jt]sx?$/;
 const MINIFIED_NAME = /\.min\.[cm]?js$/;
 
 export function isSupportedFile(file: string): boolean {
@@ -77,7 +79,7 @@ export interface CollectOptions {
   ignore?: string[];
   /** Directory basenames to skip. Defaults to `DEFAULT_EXCLUDED_DIRS`. */
   exclude?: string[];
-  /** Globs (relative to root) analyzed even under excluded directories or when minified. */
+  /** Globs (relative to root) analyzed even under excluded directories, when named like a test/story/mock file, or when minified. */
   include?: string[];
 }
 
@@ -162,11 +164,11 @@ export function collectFilesDetailed(
         }
         walk(abs, childRel, childExcluded, matches);
       } else if (entry.isFile()) {
-        if (!isSupportedFile(abs) || isTestFile(abs)) continue;
+        if (!isSupportedFile(abs)) continue;
         if (!matches(childRel) || isIgnored(abs)) continue;
+        // `include` wins over every default skip: excluded directories, test/story/mock names, minified names.
         const included = isIncluded(abs);
-        if (insideExcluded && !included) continue;
-        if (!included && isMinifiedName(abs)) continue;
+        if (!included && (isTestFile(abs) || insideExcluded || isMinifiedName(abs))) continue;
         files.add(abs);
         if (included) forced.add(abs);
       }

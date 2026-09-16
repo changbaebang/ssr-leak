@@ -1,5 +1,11 @@
 import path from 'node:path';
 import ts from 'typescript';
+import {
+  type GuardNames,
+  buildGuardNames,
+  classifyCondition,
+  isServerEarlyExit,
+} from './guards.js';
 import { type MessageVars, RULES } from './rules.js';
 import {
   type Chain,
@@ -54,6 +60,10 @@ const COLLECTION_METHODS: Readonly<Record<string, ReadonlySet<string>>> = {
   array: new Set(['push', 'unshift', 'splice', 'pop', 'shift']),
 };
 
+/** Appended to a finding that sits behind a browser-only guard (reported at `low`). */
+const GUARDED_NOTE =
+  'Guarded by a browser-only check (typeof window / isServer), so it should not run during SSR; reported for audit only.';
+
 function scriptKindOf(fileName: string): ts.ScriptKind {
   switch (path.extname(fileName)) {
     case '.tsx':
@@ -107,6 +117,13 @@ class FileAnalyzer {
   private readonly moduleScope: ModuleScope;
   private readonly taintCtx: TaintContext;
   private readonly reported = new Set<string>();
+  private readonly guardNames: GuardNames;
+  /**
+   * Greater than zero while visiting code that only runs in a browser: the then-branch of
+   * `if (typeof window !== 'undefined')`, the else-branch of `if (isServer())`, the right side of
+   * `isClient() && …`, or anything after `if (isServer()) return;` in the same block.
+   */
+  private clientOnlyDepth = 0;
 
   constructor(
     private readonly sf: ts.SourceFile,
@@ -114,6 +131,7 @@ class FileAnalyzer {
     private readonly options: AnalyzeOptions,
   ) {
     this.moduleScope = collectModuleScope(sf);
+    this.guardNames = buildGuardNames(options.guards);
     this.taintCtx = {
       fnStack: this.fnStack,
       moduleScope: this.moduleScope,
@@ -145,8 +163,53 @@ class FileAnalyzer {
       this.fnStack.pop();
       return;
     }
+    if (ts.isBlock(node)) {
+      // `if (isServer()) return;` makes the rest of this block browser-only.
+      let guarded = false;
+      for (const statement of node.statements) {
+        this.visit(statement);
+        if (!guarded && this.fnStack.length > 0 && isServerEarlyExit(statement, this.guardNames)) {
+          guarded = true;
+          this.clientOnlyDepth++;
+        }
+      }
+      if (guarded) this.clientOnlyDepth--;
+      return;
+    }
+    if (ts.isIfStatement(node)) {
+      const env = classifyCondition(node.expression, this.guardNames);
+      this.visit(node.expression);
+      this.visitClientOnly(env === 'client', node.thenStatement);
+      if (node.elseStatement) this.visitClientOnly(env === 'server', node.elseStatement);
+      return;
+    }
+    if (ts.isConditionalExpression(node)) {
+      const env = classifyCondition(node.condition, this.guardNames);
+      this.visit(node.condition);
+      this.visitClientOnly(env === 'client', node.whenTrue);
+      this.visitClientOnly(env === 'server', node.whenFalse);
+      return;
+    }
+    if (
+      ts.isBinaryExpression(node) &&
+      (node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken ||
+        node.operatorToken.kind === ts.SyntaxKind.BarBarToken)
+    ) {
+      // `isClient() && write()` / `isServer() || write()`: the right side runs only in a browser.
+      const env = classifyCondition(node.left, this.guardNames);
+      const isAnd = node.operatorToken.kind === ts.SyntaxKind.AmpersandAmpersandToken;
+      this.visit(node.left);
+      this.visitClientOnly(isAnd ? env === 'client' : env === 'server', node.right);
+      return;
+    }
     this.check(node);
     ts.forEachChild(node, (child) => this.visit(child));
+  }
+
+  private visitClientOnly(clientOnly: boolean, node: ts.Node): void {
+    if (clientOnly) this.clientOnlyDepth++;
+    this.visit(node);
+    if (clientOnly) this.clientOnlyDepth--;
   }
 
   private check(node: ts.Node): void {
@@ -371,8 +434,11 @@ class FileAnalyzer {
     confidence: Confidence = RULES[ruleId].confidence,
   ): void {
     const rule = RULES[ruleId];
+    // Code behind a browser-only guard cannot run during SSR: keep it for audits only.
+    const guarded = this.clientOnlyDepth > 0;
+    const level: Confidence = guarded ? 'low' : confidence;
     // Low-confidence findings are informational: only with `all`.
-    if (confidence === 'low' && !this.options.all) return;
+    if (level === 'low' && !this.options.all) return;
     const start = node.getStart(this.sf);
     const { line, character } = this.sf.getLineAndCharacterOfPosition(start);
     if (isSuppressed(this.sf, line, rule.id, rule.name)) return;
@@ -390,8 +456,8 @@ class FileAnalyzer {
       endColumn: end.character + 1,
       ruleId: rule.id,
       rule: rule.name,
-      confidence,
-      message: rule.message(vars),
+      confidence: level,
+      message: guarded ? `${rule.message(vars)} ${GUARDED_NOTE}` : rule.message(vars),
       fixHint: rule.fixHint,
       snippet: truncate(lineText, 160),
     });
