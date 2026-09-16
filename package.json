@@ -57,7 +57,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.9.4",
-    "@types/node": "^22.10.2",
+    "@types/node": "^26.5.0",
     "tsup": "^8.3.5",
     "vitest": "^2.1.8"
   }
