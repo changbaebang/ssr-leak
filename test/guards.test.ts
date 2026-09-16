@@ -2,14 +2,14 @@ import path from 'node:path';
 import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
 import {
-  DEFAULT_EXCLUDED_DIRS,
   buildGuardNames,
   classifyCondition,
   collectFiles,
+  DEFAULT_EXCLUDED_DIRS,
   run,
   validateConfig,
 } from '../src/index.js';
-import { FIXTURES, analyzeFixture } from './helpers.js';
+import { analyzeFixture, FIXTURES } from './helpers.js';
 
 const rows = (relative: string, options = {}) =>
   analyzeFixture(relative, { all: true, ...options }).map((f) => [f.ruleId, f.line, f.confidence]);

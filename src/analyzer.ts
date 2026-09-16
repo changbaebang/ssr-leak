@@ -1,21 +1,21 @@
 import path from 'node:path';
 import ts from 'typescript';
 import {
-  type GuardNames,
   buildGuardNames,
   classifyCondition,
+  type GuardNames,
   isServerEarlyExit,
 } from './guards.js';
 import { type MessageVars, RULES } from './rules.js';
 import {
+  buildFnScope,
   type Chain,
+  collectModuleScope,
   type FnScope,
   type FunctionLike,
+  isFunctionLikeNode,
   type ModuleBinding,
   type ModuleScope,
-  buildFnScope,
-  collectModuleScope,
-  isFunctionLikeNode,
   resolveChain,
   resolveName,
   unwrap,
@@ -24,9 +24,9 @@ import { hasFileDisable, isClientFile, isSuppressed } from './suppress.js';
 import {
   DEFAULT_TAINT_FUNCTIONS,
   DEFAULT_TAINT_IDENTIFIERS,
+  findTaint,
   type Taint,
   type TaintContext,
-  findTaint,
 } from './taint.js';
 import type { AnalyzeOptions, Confidence, Finding, RuleId } from './types.js';
 
@@ -409,7 +409,7 @@ class FileAnalyzer {
     if (!this.inRequestPath) return;
     if (chain.parts.length !== 1) return;
     const allowed = COLLECTION_METHODS[binding.collection];
-    if (!allowed || !allowed.has(method)) return;
+    if (!allowed?.has(method)) return;
     if (!VALUE_MUTATORS.has(method) && !OTHER_MUTATORS.has(method)) return;
 
     const targetText = `${truncate(callee.getText(this.sf))}(...)`;

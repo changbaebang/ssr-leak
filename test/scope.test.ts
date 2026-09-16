@@ -2,14 +2,14 @@ import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import {
   ConfigError,
-  DEFAULT_EXCLUDED_DIRS,
   collectFiles,
   collectFilesDetailed,
+  DEFAULT_EXCLUDED_DIRS,
   isMinifiedSource,
   run,
   validateConfig,
 } from '../src/index.js';
-import { FIXTURES, analyzeFixture, ruleIds } from './helpers.js';
+import { analyzeFixture, FIXTURES, ruleIds } from './helpers.js';
 
 describe('client files', () => {
   it('skips files with a "use client" directive by default', () => {
