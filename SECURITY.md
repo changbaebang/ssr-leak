@@ -21,4 +21,4 @@ Only the latest published release receives security fixes.
   the repository admin. No maintainer publishes from a local machine.
 - Every published package carries npm provenance linking it to the exact commit and workflow run.
 - GitHub Actions used by this repository are pinned to commit SHAs, and Dependabot proposes updates
-  after a 7-day cooldown.
+  after a 30-day cooldown.
