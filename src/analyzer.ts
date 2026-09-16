@@ -409,7 +409,7 @@ class FileAnalyzer {
     if (!this.inRequestPath) return;
     if (chain.parts.length !== 1) return;
     const allowed = COLLECTION_METHODS[binding.collection];
-    if (!allowed || !allowed.has(method)) return;
+    if (!allowed?.has(method)) return;
     if (!VALUE_MUTATORS.has(method) && !OTHER_MUTATORS.has(method)) return;
 
     const targetText = `${truncate(callee.getText(this.sf))}(...)`;
