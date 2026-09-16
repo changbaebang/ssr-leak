@@ -177,7 +177,7 @@ lastScroll = y;
   `runtime.isServer()` counts.
 - `guards.client` — the browser-side counterparts (built-in: `isClient`, `isBrowser`, `isClientSide`,
   `canUseDOM`). `typeof window !== 'undefined'` / `typeof document` are always recognized; `navigator` and `self`
-  are not (they exist in Node 21+ and edge runtimes).
+  are not (`navigator` exists in Node 21+, `self` in Deno and edge runtimes).
 
 ## Output example
 
@@ -305,8 +305,9 @@ Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no 
    "what is this during SSR": `isServer() || flag` is still a server guard (true on the server whatever `flag`
    is), `isServer() && flag` is not. Recognized atoms: `typeof window|document` (also via
    `globalThis.`) compared with `'undefined'` / `'object'`, `!x`, and calls or identifiers whose last name is in
-   the built-in or configured `guards` lists. `typeof navigator` and `typeof self` are **not** guards: Node 21+,
-   Bun, Deno and the edge runtimes define both, so a write behind them does run during SSR. A guard in a
+   the built-in or configured `guards` lists. `typeof navigator` and `typeof self` are **not** guards: Node 21+ (and Bun)
+   define `navigator`, while Deno and the edge runtimes may also define `self`; neither is universally
+   browser-only, so a write behind them can run during SSR. A guard in a
    *different* function (`ensureBrowser()` called at the top) is not followed.
 7. **Writes.** For every assignment (`=`, `+=`, …, including destructuring targets), `++`/`--`,
    `Object.assign(target, …)`, and mutating call (`set/add/push/unshift/splice/clear/delete/pop/shift`), resolve

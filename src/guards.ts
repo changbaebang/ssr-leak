@@ -25,9 +25,9 @@ export const DEFAULT_CLIENT_GUARDS: readonly string[] = [
 
 /**
  * Globals whose `typeof` is `'undefined'` in every supported server runtime and an object in a
- * browser. `navigator` is deliberately absent: Node 21+, Bun, Deno and the edge runtimes define it,
- * so `typeof navigator === 'object'` is true during SSR. `self` is absent for the same reason (edge
- * runtimes and Deno define it).
+ * browser. `navigator` is deliberately absent: Node 21+ and Bun define it, so
+ * `typeof navigator === 'object'` is true during SSR there. `self` is absent because Deno and the
+ * edge runtimes define it (Node does not, but the guard must hold in every supported runtime).
  */
 const BROWSER_GLOBALS: ReadonlySet<string> = new Set(['window', 'document']);
 
@@ -100,7 +100,7 @@ function classifyTypeofComparison(expr: ts.BinaryExpression): RuntimeEnv {
  * there, `'client'` when it is guaranteed false there (true only in a browser), `null` otherwise.
  *
  * - `typeof window === 'undefined'` → server; `!== 'undefined'` → client. Also `document` and
- *   `globalThis.window`. `navigator` / `self` are not guards: Node 21+ and edge runtimes define them.
+ *   `globalThis.window`. `navigator` (Node 21+, Bun) and `self` (Deno, edge runtimes) are not guards.
  * - A call or identifier whose last name is in `names.server` → server, `names.client` → client.
  * - `!x` flips. Three-valued logic for `&&` / `||`: `server || x` is still server (true on the
  *   server no matter what `x` is), `client && x` is still client (false on the server), while

@@ -15,7 +15,7 @@ All notable changes to this project are documented here. The format follows
   `isClient() && …` / `isServer() || …`, and the matching arm of a ternary. Conditions use three-valued logic
   (`isServer() || flag` is a guard, `isServer() && flag` is not). Atoms: `typeof window|document` (also via
   `globalThis.`) vs `'undefined'` / `'object'` — `navigator` and `self` are deliberately not guards because
-  Node 21+, Bun, Deno and edge runtimes define them — `!x`, and calls or identifiers named `isServer`,
+  Node 21+ and Bun define `navigator`, and Deno and edge runtimes may also define `self` — `!x`, and calls or identifiers named `isServer`,
   `isSSR`, `isServerSide` (server) or `isClient`, `isBrowser`, `isClientSide`, `canUseDOM` (client), matched by
   the last name of the callee.
 - Config key `guards: { server?: string[]; client?: string[] }` (and `AnalyzeOptions.guards`) to add guard names.
