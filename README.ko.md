@@ -78,9 +78,10 @@ pnpm ssr-leak src app pages lib
 기본값: 현재 디렉터리 아래 모든 `*.{ts,tsx,js,jsx,mjs,cjs}`. 다음은 건너뜁니다.
 
 - 어디에 있든 이름이 `node_modules`, `dist`, `build`, `out`, `.next`, `.vercel`, `.output`, `.turbo`, `.cache`,
-  `.git`, `coverage`, `storybook-static`, `public`인 디렉터리(빌드 산출물, 정적 자산, 캐시, VCS 메타데이터) —
-  설정 파일의 `exclude` / `include`로 바꿀 수 있고, 명령줄에 직접 지정한 디렉터리는 항상 탐색합니다;
-- 선언 파일과 테스트/스토리 파일(`*.test.*`, `*.spec.*`, `__tests__/`, `*.stories.*`);
+  `.git`, `coverage`, `storybook-static`, `public`, `mocks`, `__mocks__`인 디렉터리(빌드 산출물, 정적 자산,
+  캐시, VCS 메타데이터, 목 핸들러) — 설정 파일의 `exclude` / `include`로 바꿀 수 있고, 명령줄에 직접 지정한
+  디렉터리는 항상 탐색합니다;
+- 선언 파일과 테스트/스토리/목 파일(`*.test.*`, `*.spec.*`, `__tests__/`, `*.stories.*`, `*.mock.*`);
 - 압축(minified) 파일: `*.min.js`, 그리고 한 줄이 2000자를 넘는 파일(직접 지정하거나 `include`에 걸리는 파일은
   그래도 분석);
 - `'use client'`로 시작하는 파일 — `--include-client`를 주지 않는 한(위 주의 참고).
@@ -153,6 +154,10 @@ lastScroll = y;
   "taintSources": {
     "functions": ["auth", "getToken"],
     "identifiers": ["nextReq"]
+  },
+  "guards": {
+    "server": ["isNodeRuntime"],
+    "client": ["inBrowser"]
   }
 }
 ```
@@ -165,6 +170,10 @@ lastScroll = y;
   `getServerSession`).
 - `taintSources.identifiers` — 프로퍼티 읽기가 요청 스코프인 식별자 추가(내장: `req`, `request`, `ctx`,
   `context`, `params`, `searchParams`, `event`).
+- `guards.server` — 서버에서만 참인 함수·식별자 추가. 브라우저 전용 코드를 알아보는 데 씁니다(내장: `isServer`,
+  `isSSR`, `isServerSide`). 호출 대상의 마지막 이름으로 맞추므로 `runtime.isServer()`도 인식합니다.
+- `guards.client` — 브라우저 쪽 짝(내장: `isClient`, `isBrowser`, `isClientSide`, `canUseDOM`).
+  `typeof window !== 'undefined'` 류는 항상 인식합니다.
 
 ## 출력 예시
 
@@ -281,6 +290,15 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
    최상위 문장이 인스턴스화하는 export되지 않은 클래스의 생성자(`const boot = new Boot()`).
    `useEffect` / `useLayoutEffect` / `useInsertionEffect` 콜백 안의 코드는 검사하지 않습니다 — effect는 SSR 중
    실행되지 않기 때문입니다.
+   **브라우저 전용 가드.** 브라우저에서만 실행될 수 있는 쓰기는 원래 신뢰도 대신 `low`로 보고합니다(`--all`로
+   보이며 메시지에 설명이 붙습니다). 인식하는 모양은 모두 같은 함수 안에서: 같은 블록에서 `if (isServer()) return;`
+   (또는 `throw`) 뒤의 모든 문장; `if (typeof window !== 'undefined')`의 then 분기;
+   `if (typeof window === 'undefined')`의 else 분기; `isClient() && …` / `isServer() || …`의 오른쪽; 삼항 연산자의
+   해당 분기. 조건은 "SSR 중 이 값이 무엇인가"에 대한 3값 논리로 봅니다: `isServer() || flag`는 `flag`와 무관하게
+   서버에서 참이므로 여전히 서버 가드이고, `isServer() && flag`는 아닙니다. 인식하는 원자: `'undefined'` /
+   `'object'`와 비교한 `typeof window|document|navigator|self`(`globalThis.` 경유 포함), `!x`, 마지막 이름이
+   내장 또는 설정 `guards` 목록에 있는 호출·식별자. *다른* 함수에 있는 가드(맨 위에서 호출하는 `ensureBrowser()`)는
+   따라가지 않습니다.
 7. **쓰기**: 모든 대입(`=`, `+=`, …, 구조 분해 대상 포함), `++`/`--`, `Object.assign(target, …)`, 변경 호출
    (`set/add/push/unshift/splice/clear/delete/pop/shift`)에 대해 대상의 루트 식별자와 프로퍼티 체인을 해석해
    분류합니다: axios defaults → R1/R2; `globalThis`/`global`/`process.env` → R6; 모듈 레벨 바인딩 → R4/R5
@@ -341,6 +359,11 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 - 맨 오염 식별자(`req`, `params`, …)는 모듈 레벨 바인딩이 아닐 때만 오염으로 보므로, 모듈 레벨
   `const context = createContext()`는 오염 소스가 아닙니다. 함수 로컬 `const params = …`는 이름만으로 오염으로
   **취급됩니다**. 요청 데이터가 아니면 이름을 바꾸거나 억제하세요.
+- 브라우저 전용 가드(`typeof window !== 'undefined'`, `if (isServer()) return;`, …) 뒤의 쓰기는 버리지 않고
+  `low`로 낮추므로 `--all`로 감사 목록에 남습니다. 비용: `guards`에 없는 이름의 가드(또는 다른 함수에 있는 가드)는
+  보지 못하고, *틀린* 가드(예: 테스트 환경에서 모듈 로드 시 한 번 계산되는 `canUseDOM`)도 그대로 믿습니다.
+- `mocks/`, `__mocks__/`, `*.mock.*`는 기본으로 건너뜁니다(MSW·Jest 핸들러는 설계상 모듈 레벨 스토어를 둡니다).
+  분석하려면 디렉터리를 직접 지정하거나 `include`를 쓰세요.
 
 ### 알려진 오탐
 
@@ -351,9 +374,10 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 - **`'use client'`가 없는 컴포넌트의 `useCallback` / 이벤트 핸들러 본문**: 위와 같습니다 — 콜백 안에서 컴포넌트
   prop을 모듈 스코프에 쓰면 그 콜백이 SSR 중 실행되지 않더라도 R4 `medium`입니다.
 - **Pages Router의 브라우저 전용 모듈**(`'use client'` 디렉티브가 없음): 스크롤 위치나 popstate 리스너를 모듈
-  스코프에 두는 모듈은 브라우저만 호출해도 R4로 잡힙니다. `ignore`에 추가하거나 억제 주석을 쓰세요.
-- **목 서버**(모듈 레벨 스토어를 두고 `request`로부터 쓰는 MSW 핸들러). 엄밀히는 요청 간 스토어입니다. 개발
-  전용이면 `**/mocks/**`를 `ignore`에 추가하세요.
+  스코프에 두는 모듈은 브라우저만 호출해도, 그 함수 자체에 가드가 없으면(가드가 호출하는 헬퍼나 호출자에 있으면)
+  R4로 잡힙니다. 함수에 가드를 넣거나, `ignore`에 추가하거나, 억제 주석을 쓰세요.
+- **기본 디렉터리 밖의 목 서버**(`src/api/fake/` 아래 MSW 핸들러): 엄밀히는 요청 간 스토어입니다. 개발 전용이면
+  경로를 `ignore`나 `exclude`에 추가하세요.
 - **보수적인 호출 전파**: `cache.set(key, expensive(params.id))`는 `expensive()`가 요청과 무관한 값을 반환해도
   인자를 통해 오염됩니다.
 - **요청 프리미티브와 같은 이름의 함수 로컬 변수**(`const params = new URLSearchParams(…)`)는 이름만으로
@@ -379,6 +403,8 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 - export된 setter를 가진 `store` 스타일 모듈의 파일 간 오염 추적.
 - 모듈 스코프에 저장된 클로저 / 클래스 인스턴스 규칙.
 - `useCallback` 본문과 JSX `on*` prop에 넘긴 함수를 모든 규칙에서 면제(SSR 중 실행되지 않음).
+- 브라우저 전용 가드를 함수 경계 너머로 추적(`ensureBrowser()` 헬퍼, 가드된 호출자) — 지금은 가드가 자기 함수만
+  덮습니다.
 - 탐색 단계의 선택적 `.gitignore` 인식.
 - SARIF 출력.
 

@@ -15,7 +15,7 @@ export const DEFAULT_PATTERN = '**/*.{ts,tsx,js,jsx,mjs,cjs}';
 
 /**
  * Directory basenames skipped wherever they appear: package installs, build outputs, static
- * assets, caches and VCS metadata. Override with the `exclude` config key; re-include single paths
+ * assets, caches, VCS metadata and mock handlers (MSW `mocks/`, Jest `__mocks__/`). Override with the `exclude` config key; re-include single paths
  * with `include`.
  */
 export const DEFAULT_EXCLUDED_DIRS: readonly string[] = [
@@ -32,6 +32,8 @@ export const DEFAULT_EXCLUDED_DIRS: readonly string[] = [
   'coverage',
   'storybook-static',
   'public',
+  'mocks',
+  '__mocks__',
 ];
 
 export const EXCLUDED_DIRS: ReadonlySet<string> = new Set(DEFAULT_EXCLUDED_DIRS);
@@ -39,7 +41,7 @@ export const EXCLUDED_DIRS: ReadonlySet<string> = new Set(DEFAULT_EXCLUDED_DIRS)
 /** A source line longer than this marks the file as minified and it is skipped. */
 export const MAX_LINE_LENGTH = 2000;
 
-const TEST_FILE = /(^|[\\/])__tests__[\\/]|\.(test|spec|stories)\.[cm]?[jt]sx?$/;
+const TEST_FILE = /(^|[\\/])__tests__[\\/]|\.(test|spec|stories|mock)\.[cm]?[jt]sx?$/;
 const MINIFIED_NAME = /\.min\.[cm]?js$/;
 
 export function isSupportedFile(file: string): boolean {
