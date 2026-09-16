@@ -1,6 +1,6 @@
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { type AnalyzeOptions, type Finding, analyzeFile } from '../src/index.js';
+import { type AnalyzeOptions, analyzeFile, type Finding } from '../src/index.js';
 
 export const FIXTURES = path.resolve(path.dirname(fileURLToPath(import.meta.url)), 'fixtures');
 

@@ -1,21 +1,21 @@
 import path from 'node:path';
 import ts from 'typescript';
 import {
-  type GuardNames,
   buildGuardNames,
   classifyCondition,
+  type GuardNames,
   isServerEarlyExit,
 } from './guards.js';
 import { type MessageVars, RULES } from './rules.js';
 import {
+  buildFnScope,
   type Chain,
+  collectModuleScope,
   type FnScope,
   type FunctionLike,
+  isFunctionLikeNode,
   type ModuleBinding,
   type ModuleScope,
-  buildFnScope,
-  collectModuleScope,
-  isFunctionLikeNode,
   resolveChain,
   resolveName,
   unwrap,
@@ -24,9 +24,9 @@ import { hasFileDisable, isClientFile, isSuppressed } from './suppress.js';
 import {
   DEFAULT_TAINT_FUNCTIONS,
   DEFAULT_TAINT_IDENTIFIERS,
+  findTaint,
   type Taint,
   type TaintContext,
-  findTaint,
 } from './taint.js';
 import type { AnalyzeOptions, Confidence, Finding, RuleId } from './types.js';
 

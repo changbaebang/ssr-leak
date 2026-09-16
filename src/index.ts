@@ -3,33 +3,33 @@ export { findConfigFile, loadConfigFile, resolveConfig, validateConfig } from '.
 export {
   type CollectOptions,
   type CollectResult,
+  collectFiles,
+  collectFilesDetailed,
   DEFAULT_EXCLUDED_DIRS,
   DEFAULT_PATTERN,
   EXCLUDED_DIRS,
+  isMinifiedSource,
   MAX_LINE_LENGTH,
   SUPPORTED_EXTENSIONS,
-  collectFiles,
-  collectFilesDetailed,
-  isMinifiedSource,
 } from './files.js';
 export { formatHuman, formatJson } from './format.js';
 export {
+  buildGuardNames,
+  classifyCondition,
   DEFAULT_CLIENT_GUARDS,
   DEFAULT_SERVER_GUARDS,
   type GuardNames,
   type RuntimeEnv,
-  buildGuardNames,
-  classifyCondition,
 } from './guards.js';
-export { CONFIDENCE_RANK, RULES, RULE_LIST, type RuleMeta } from './rules.js';
+export { CONFIDENCE_RANK, RULE_LIST, RULES, type RuleMeta } from './rules.js';
 export { analyzeFile, run, shouldFail, summarize } from './run.js';
 export { parseIgnoreRules } from './suppress.js';
 export { DEFAULT_TAINT_FUNCTIONS, DEFAULT_TAINT_IDENTIFIERS, type Taint } from './taint.js';
 export {
   type AnalyzeOptions,
+  type Confidence,
   type Config,
   ConfigError,
-  type Confidence,
   type Diagnostic,
   type DiagnosticKind,
   type Finding,

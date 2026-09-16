@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { analyzeSource } from './analyzer.js';
 import { resolveConfig } from './config.js';
-import { DEFAULT_PATTERN, collectFilesDetailed, isMinifiedSource, toPosix } from './files.js';
+import { collectFilesDetailed, DEFAULT_PATTERN, isMinifiedSource, toPosix } from './files.js';
 import { CONFIDENCE_RANK } from './rules.js';
 import type {
   AnalyzeOptions,

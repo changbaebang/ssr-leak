@@ -13,6 +13,11 @@ updates:
         dependency-type: development
         update-types: [minor, patch]
     open-pull-requests-limit: 5
+    ignore:
+      # This package parses code with the TypeScript compiler API. TypeScript 7 (the Go compiler)
+      # does not ship that JS API, so majors must be evaluated by hand.
+      - dependency-name: typescript
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
