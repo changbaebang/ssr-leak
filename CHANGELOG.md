@@ -13,8 +13,9 @@ All notable changes to this project are documented here. The format follows
   statements after `if (isServer()) return;` / `throw` in the same block, the then-branch of
   `if (typeof window !== 'undefined')`, the else-branch of `if (typeof window === 'undefined')`, the right side of
   `isClient() && …` / `isServer() || …`, and the matching arm of a ternary. Conditions use three-valued logic
-  (`isServer() || flag` is a guard, `isServer() && flag` is not). Atoms: `typeof window|document|navigator|self`
-  (also via `globalThis.`) vs `'undefined'` / `'object'`, `!x`, and calls or identifiers named `isServer`,
+  (`isServer() || flag` is a guard, `isServer() && flag` is not). Atoms: `typeof window|document` (also via
+  `globalThis.`) vs `'undefined'` / `'object'` — `navigator` and `self` are deliberately not guards because
+  Node 21+, Bun, Deno and edge runtimes define them — `!x`, and calls or identifiers named `isServer`,
   `isSSR`, `isServerSide` (server) or `isClient`, `isBrowser`, `isClientSide`, `canUseDOM` (client), matched by
   the last name of the callee.
 - Config key `guards: { server?: string[]; client?: string[] }` (and `AnalyzeOptions.guards`) to add guard names.
@@ -24,6 +25,8 @@ All notable changes to this project are documented here. The format follows
 
 - Discovery skips `mocks/` and `__mocks__/` directories and `*.mock.*` files by default (MSW and Jest handlers
   keep module-level stores by design). Name them explicitly or use `include` to analyze them.
+- `include` now overrides the test/story/mock filename skip as well as excluded directories and minified names;
+  previously `*.test.*` / `*.stories.*` could only be analyzed by naming the file explicitly.
 
 ## [0.1.0] - 2026-09-15
 

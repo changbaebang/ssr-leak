@@ -23,8 +23,13 @@ export const DEFAULT_CLIENT_GUARDS: readonly string[] = [
   'canUseDOM',
 ];
 
-/** Globals whose `typeof` is `'undefined'` on the server and an object in a browser. */
-const BROWSER_GLOBALS: ReadonlySet<string> = new Set(['window', 'document', 'navigator', 'self']);
+/**
+ * Globals whose `typeof` is `'undefined'` in every supported server runtime and an object in a
+ * browser. `navigator` is deliberately absent: Node 21+, Bun, Deno and the edge runtimes define it,
+ * so `typeof navigator === 'object'` is true during SSR. `self` is absent for the same reason (edge
+ * runtimes and Deno define it).
+ */
+const BROWSER_GLOBALS: ReadonlySet<string> = new Set(['window', 'document']);
 
 export function buildGuardNames(extra?: { server?: string[]; client?: string[] }): GuardNames {
   return {
@@ -94,8 +99,8 @@ function classifyTypeofComparison(expr: ts.BinaryExpression): RuntimeEnv {
  * Classifies a boolean expression by its value during SSR: `'server'` when it is guaranteed true
  * there, `'client'` when it is guaranteed false there (true only in a browser), `null` otherwise.
  *
- * - `typeof window === 'undefined'` → server; `!== 'undefined'` → client. Also `document`,
- *   `navigator`, `self`, and `globalThis.window`.
+ * - `typeof window === 'undefined'` → server; `!== 'undefined'` → client. Also `document` and
+ *   `globalThis.window`. `navigator` / `self` are not guards: Node 21+ and edge runtimes define them.
  * - A call or identifier whose last name is in `names.server` → server, `names.client` → client.
  * - `!x` flips. Three-valued logic for `&&` / `||`: `server || x` is still server (true on the
  *   server no matter what `x` is), `client && x` is still client (false on the server), while

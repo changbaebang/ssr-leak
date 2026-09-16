@@ -79,7 +79,7 @@ export interface CollectOptions {
   ignore?: string[];
   /** Directory basenames to skip. Defaults to `DEFAULT_EXCLUDED_DIRS`. */
   exclude?: string[];
-  /** Globs (relative to root) analyzed even under excluded directories or when minified. */
+  /** Globs (relative to root) analyzed even under excluded directories, when named like a test/story/mock file, or when minified. */
   include?: string[];
 }
 
@@ -164,11 +164,11 @@ export function collectFilesDetailed(
         }
         walk(abs, childRel, childExcluded, matches);
       } else if (entry.isFile()) {
-        if (!isSupportedFile(abs) || isTestFile(abs)) continue;
+        if (!isSupportedFile(abs)) continue;
         if (!matches(childRel) || isIgnored(abs)) continue;
+        // `include` wins over every default skip: excluded directories, test/story/mock names, minified names.
         const included = isIncluded(abs);
-        if (insideExcluded && !included) continue;
-        if (!included && isMinifiedName(abs)) continue;
+        if (!included && (isTestFile(abs) || insideExcluded || isMinifiedName(abs))) continue;
         files.add(abs);
         if (included) forced.add(abs);
       }

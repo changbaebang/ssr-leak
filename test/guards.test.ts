@@ -26,8 +26,14 @@ describe('classifyCondition', () => {
     expect(classify("typeof window !== 'undefined'")).toBe('client');
     expect(classify("'undefined' == typeof document")).toBe('server');
     expect(classify("typeof globalThis.window !== 'undefined'")).toBe('client');
-    expect(classify("typeof navigator === 'object'")).toBe('client');
     expect(classify("typeof foo === 'undefined'")).toBeNull();
+  });
+
+  it('does not treat navigator or self as browser-only (Node 21+, Bun, Deno and edge runtimes define them)', () => {
+    expect(classify("typeof navigator === 'object'")).toBeNull();
+    expect(classify("typeof navigator === 'undefined'")).toBeNull();
+    expect(classify("typeof self !== 'undefined'")).toBeNull();
+    expect(classify("typeof globalThis.navigator === 'undefined'")).toBeNull();
   });
 
   it('recognizes built-in and configured guard names, including member calls', () => {
@@ -119,6 +125,16 @@ describe('browser-only guards downgrade findings to low', () => {
     ]);
   });
 
+  it('keeps a real leak behind a navigator/self check at its normal confidence', () => {
+    // On the current Node, `navigator` really is defined, so the guarded branch does run during SSR.
+    expect(typeof navigator).toBe('object');
+    expect(rows('guards/navigator-is-not-a-guard.ts')).toEqual([
+      ['R4', 8, 'high'],
+      ['R4', 11, 'high'],
+    ]);
+    expect(analyzeFixture('guards/navigator-is-not-a-guard.ts')).toHaveLength(2);
+  });
+
   it('applies to every rule, not only R4', () => {
     const findings = analyzeFixture('guards/axios-guarded.ts', { all: true });
     expect(findings.map((f) => [f.ruleId, f.confidence])).toEqual([['R1', 'low']]);
@@ -155,5 +171,24 @@ describe('mock handlers are skipped by default', () => {
   it('still analyzes a mock file when it is named explicitly', async () => {
     const report = await run({ root: FIXTURES, patterns: ['discovery/mocks/handler.ts'] });
     expect(report.findings.map((f) => f.ruleId)).toEqual(['R4']);
+  });
+
+  it('config "include" re-adds mock files (and test/story names) during a directory walk', async () => {
+    const report = await run({
+      root: FIXTURES,
+      patterns: ['discovery'],
+      config: { include: ['discovery/src/client.mock.ts', 'discovery/mocks/**'] },
+    });
+    expect(report.findings.map((f) => f.file).sort()).toEqual([
+      'discovery/mocks/handler.ts',
+      'discovery/src/client.mock.ts',
+      'discovery/src/ok.js',
+    ]);
+    const stories = await run({
+      root: FIXTURES,
+      patterns: ['discovery'],
+      config: { include: ['discovery/src/*.stories.js'] },
+    });
+    expect(stories.findings.map((f) => f.file)).toContain('discovery/src/story.stories.js');
   });
 });

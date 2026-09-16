@@ -166,8 +166,8 @@ lastScroll = y;
 - `ignore` — globs relative to `--root`; matching files and directories are skipped.
 - `exclude` — directory basenames skipped wherever they appear. **Replaces** the built-in list (see
   "Install & usage"), so repeat the entries you still want.
-- `include` — globs relative to `--root` that are analyzed even when they sit under an excluded directory or look
-  minified.
+- `include` — globs relative to `--root` that are analyzed even when they sit under an excluded directory, are
+  named like a test/story/mock file (`*.test.*`, `*.stories.*`, `*.mock.*`, `__tests__/`), or look minified.
 - `taintSources.functions` — extra function names whose return value is request-scoped (built-in:
   `headers`, `cookies`, `draftMode`, `getServerSession`).
 - `taintSources.identifiers` — extra identifiers whose property reads are request-scoped (built-in:
@@ -176,7 +176,8 @@ lastScroll = y;
   browser-only code (built-in: `isServer`, `isSSR`, `isServerSide`). Matched by the last name of the callee, so
   `runtime.isServer()` counts.
 - `guards.client` — the browser-side counterparts (built-in: `isClient`, `isBrowser`, `isClientSide`,
-  `canUseDOM`). `typeof window !== 'undefined'` and friends are always recognized.
+  `canUseDOM`). `typeof window !== 'undefined'` / `typeof document` are always recognized; `navigator` and `self`
+  are not (they exist in Node 21+ and edge runtimes).
 
 ## Output example
 
@@ -302,10 +303,11 @@ Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no 
    `if (typeof window !== 'undefined')`; the else-branch of `if (typeof window === 'undefined')`; the right side of
    `isClient() && …` / `isServer() || …`; the matching arm of a ternary. Conditions use three-valued logic on
    "what is this during SSR": `isServer() || flag` is still a server guard (true on the server whatever `flag`
-   is), `isServer() && flag` is not. Recognized atoms: `typeof window|document|navigator|self` (also via
+   is), `isServer() && flag` is not. Recognized atoms: `typeof window|document` (also via
    `globalThis.`) compared with `'undefined'` / `'object'`, `!x`, and calls or identifiers whose last name is in
-   the built-in or configured `guards` lists. A guard in a *different* function (`ensureBrowser()` called at the
-   top) is not followed.
+   the built-in or configured `guards` lists. `typeof navigator` and `typeof self` are **not** guards: Node 21+,
+   Bun, Deno and the edge runtimes define both, so a write behind them does run during SSR. A guard in a
+   *different* function (`ensureBrowser()` called at the top) is not followed.
 7. **Writes.** For every assignment (`=`, `+=`, …, including destructuring targets), `++`/`--`,
    `Object.assign(target, …)`, and mutating call (`set/add/push/unshift/splice/clear/delete/pop/shift`), resolve
    the target's root identifier and property chain and classify: axios defaults → R1/R2;
@@ -377,7 +379,8 @@ These are deliberate and documented here so you can decide whether they fit your
   `guards` (or that lives in another function) is not seen, and a guard that is *wrong* (e.g. a `canUseDOM`
   that is computed once at module load in a test environment) is trusted.
 - `mocks/`, `__mocks__/` and `*.mock.*` are skipped by default (MSW and Jest handlers keep module-level stores
-  by design). Name the directory explicitly or use `include` to analyze them.
+  by design). Name the path explicitly or list it in `include` to analyze it; `include` overrides every default
+  skip.
 
 ### Known false positives
 

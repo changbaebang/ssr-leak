@@ -165,7 +165,8 @@ lastScroll = y;
 - `ignore` — `--root` 기준 glob. 일치하는 파일·디렉터리를 건너뜁니다.
 - `exclude` — 어디에 있든 건너뛸 디렉터리 이름. 내장 목록("설치 & 사용" 참고)을 **대체**하므로 계속 원하는
   항목은 다시 적어야 합니다.
-- `include` — `--root` 기준 glob. 제외 디렉터리 아래에 있거나 압축 파일로 보여도 분석합니다.
+- `include` — `--root` 기준 glob. 제외 디렉터리 아래에 있거나, 테스트/스토리/목 파일 이름(`*.test.*`, `*.stories.*`,
+  `*.mock.*`, `__tests__/`)이거나, 압축 파일로 보여도 분석합니다.
 - `taintSources.functions` — 반환값이 요청 스코프인 함수 이름 추가(내장: `headers`, `cookies`, `draftMode`,
   `getServerSession`).
 - `taintSources.identifiers` — 프로퍼티 읽기가 요청 스코프인 식별자 추가(내장: `req`, `request`, `ctx`,
@@ -173,7 +174,8 @@ lastScroll = y;
 - `guards.server` — 서버에서만 참인 함수·식별자 추가. 브라우저 전용 코드를 알아보는 데 씁니다(내장: `isServer`,
   `isSSR`, `isServerSide`). 호출 대상의 마지막 이름으로 맞추므로 `runtime.isServer()`도 인식합니다.
 - `guards.client` — 브라우저 쪽 짝(내장: `isClient`, `isBrowser`, `isClientSide`, `canUseDOM`).
-  `typeof window !== 'undefined'` 류는 항상 인식합니다.
+  `typeof window !== 'undefined'` / `typeof document`는 항상 인식하고, `navigator`·`self`는 인식하지 않습니다
+  (Node 21+와 엣지 런타임에 존재).
 
 ## 출력 예시
 
@@ -296,9 +298,10 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
    `if (typeof window === 'undefined')`의 else 분기; `isClient() && …` / `isServer() || …`의 오른쪽; 삼항 연산자의
    해당 분기. 조건은 "SSR 중 이 값이 무엇인가"에 대한 3값 논리로 봅니다: `isServer() || flag`는 `flag`와 무관하게
    서버에서 참이므로 여전히 서버 가드이고, `isServer() && flag`는 아닙니다. 인식하는 원자: `'undefined'` /
-   `'object'`와 비교한 `typeof window|document|navigator|self`(`globalThis.` 경유 포함), `!x`, 마지막 이름이
-   내장 또는 설정 `guards` 목록에 있는 호출·식별자. *다른* 함수에 있는 가드(맨 위에서 호출하는 `ensureBrowser()`)는
-   따라가지 않습니다.
+   `'object'`와 비교한 `typeof window|document`(`globalThis.` 경유 포함), `!x`, 마지막 이름이
+   내장 또는 설정 `guards` 목록에 있는 호출·식별자. `typeof navigator`·`typeof self`는 가드가 **아닙니다**: Node 21+,
+   Bun, Deno, 엣지 런타임이 둘 다 정의하므로 그 뒤의 쓰기는 SSR 중에도 실행됩니다. *다른* 함수에 있는 가드(맨
+   위에서 호출하는 `ensureBrowser()`)는 따라가지 않습니다.
 7. **쓰기**: 모든 대입(`=`, `+=`, …, 구조 분해 대상 포함), `++`/`--`, `Object.assign(target, …)`, 변경 호출
    (`set/add/push/unshift/splice/clear/delete/pop/shift`)에 대해 대상의 루트 식별자와 프로퍼티 체인을 해석해
    분류합니다: axios defaults → R1/R2; `globalThis`/`global`/`process.env` → R6; 모듈 레벨 바인딩 → R4/R5
@@ -363,7 +366,7 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
   `low`로 낮추므로 `--all`로 감사 목록에 남습니다. 비용: `guards`에 없는 이름의 가드(또는 다른 함수에 있는 가드)는
   보지 못하고, *틀린* 가드(예: 테스트 환경에서 모듈 로드 시 한 번 계산되는 `canUseDOM`)도 그대로 믿습니다.
 - `mocks/`, `__mocks__/`, `*.mock.*`는 기본으로 건너뜁니다(MSW·Jest 핸들러는 설계상 모듈 레벨 스토어를 둡니다).
-  분석하려면 디렉터리를 직접 지정하거나 `include`를 쓰세요.
+  분석하려면 경로를 직접 지정하거나 `include`에 적으세요. `include`는 모든 기본 건너뛰기보다 우선합니다.
 
 ### 알려진 오탐
 
