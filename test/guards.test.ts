@@ -126,8 +126,9 @@ describe('browser-only guards downgrade findings to low', () => {
   });
 
   it('keeps a real leak behind a navigator/self check at its normal confidence', () => {
-    // On the current Node, `navigator` really is defined, so the guarded branch does run during SSR.
-    expect(typeof navigator).toBe('object');
+    // Node 21+ defines `navigator` (Node 20 does not), so the guarded branch really runs during SSR there.
+    const major = Number(process.versions.node.split('.')[0]);
+    expect(typeof navigator).toBe(major >= 21 ? 'object' : 'undefined');
     expect(rows('guards/navigator-is-not-a-guard.ts')).toEqual([
       ['R4', 8, 'high'],
       ['R4', 11, 'high'],
