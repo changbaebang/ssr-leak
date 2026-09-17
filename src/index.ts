@@ -1,5 +1,6 @@
 export { analyzeSource } from './analyzer.js';
 export { findConfigFile, loadConfigFile, resolveConfig, validateConfig } from './config.js';
+export { EVIDENCE_NOTES, type EvidenceKind } from './evidence.js';
 export {
   type CollectOptions,
   type CollectResult,
@@ -24,7 +25,13 @@ export {
 export { CONFIDENCE_RANK, RULE_LIST, RULES, type RuleMeta } from './rules.js';
 export { analyzeFile, run, shouldFail, summarize } from './run.js';
 export { parseIgnoreRules } from './suppress.js';
-export { DEFAULT_TAINT_FUNCTIONS, DEFAULT_TAINT_IDENTIFIERS, type Taint } from './taint.js';
+export {
+  DEFAULT_TAINT_FUNCTIONS,
+  DEFAULT_TAINT_IDENTIFIERS,
+  REQUEST_MEMBERS,
+  type Taint,
+  WEAK_TAINT_IDENTIFIERS,
+} from './taint.js';
 export {
   type AnalyzeOptions,
   type Confidence,

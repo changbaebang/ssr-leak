@@ -1,6 +1,12 @@
 import path from 'node:path';
 import ts from 'typescript';
 import {
+  EVIDENCE_NOTES,
+  type EvidenceKind,
+  functionCallsMethodOn,
+  precededByBrowserDeref,
+} from './evidence.js';
+import {
   buildGuardNames,
   classifyCondition,
   type GuardNames,
@@ -329,16 +335,25 @@ class FileAnalyzer {
    * R4 when the write is tainted, R5 otherwise. R4 is `high` only when the taint is a request
    * primitive; a bare parameter of a non-entry function gives `medium`.
    */
-  private reportStateWrite(at: ts.Node, target: string, taint: Taint | null): void {
+  private reportStateWrite(
+    at: ts.Node,
+    target: string,
+    taint: Taint | null,
+    evidence: EvidenceKind | null = null,
+  ): void {
+    // A browser-only dereference before the write is evidence for any write, not only weak ones.
+    const proof =
+      evidence ??
+      (precededByBrowserDeref(at, this.fnStack, this.moduleScope) ? 'browser-deref' : null);
     if (!taint) {
-      this.report('R5', at, { target });
+      this.report('R5', at, { target }, undefined, proof);
       return;
     }
     if (taint.primitive) {
-      this.report('R4', at, { target, source: taint.source });
+      this.report('R4', at, { target, source: taint.source }, undefined, proof);
       return;
     }
-    this.report('R4', at, { target, source: taint.source, weak: true }, 'medium');
+    this.report('R4', at, { target, source: taint.source, weak: true }, 'medium', proof);
   }
 
   private taintOfWrite(chain: Chain, values: readonly ts.Expression[]): Taint | null {
@@ -411,20 +426,33 @@ class FileAnalyzer {
     const allowed = COLLECTION_METHODS[binding.collection];
     if (!allowed?.has(method)) return;
     if (!VALUE_MUTATORS.has(method) && !OTHER_MUTATORS.has(method)) return;
+    const innermostScope = this.fnStack.at(-1);
+    if (!innermostScope) return;
 
     const targetText = `${truncate(callee.getText(this.sf))}(...)`;
     let taint: Taint | null = null;
+    let evidence: EvidenceKind | null = null;
     if (VALUE_MUTATORS.has(method)) {
-      for (const arg of call.arguments) {
-        const r = findTaint(arg, this.taintCtx);
-        if (r?.primitive) {
-          taint = r;
-          break;
+      const taints = call.arguments.map((arg) => findTaint(arg, this.taintCtx));
+      taint = taints.find((t) => t?.primitive) ?? taints.find((t) => t) ?? null;
+      const collectionName = chain.root.text;
+      if (taint && !taint.primitive) {
+        const [keyTaint, valueTaint] = taints;
+        if (binding.collection === 'set' && method === 'add') {
+          if (functionCallsMethodOn(innermostScope, collectionName, 'has')) evidence = 'dedupe-set';
+        } else if (
+          binding.collection === 'map' &&
+          method === 'set' &&
+          call.arguments.length === 2
+        ) {
+          if (keyTaint && !valueTaint) evidence = 'argument-keyed-cache';
         }
-        taint ??= r;
+        if (!evidence && functionCallsMethodOn(innermostScope, collectionName, 'delete')) {
+          evidence = 'request-lifetime';
+        }
       }
     }
-    this.reportStateWrite(call, targetText, taint);
+    this.reportStateWrite(call, targetText, taint, evidence);
   }
 
   private report(
@@ -432,11 +460,15 @@ class FileAnalyzer {
     node: ts.Node,
     vars: MessageVars,
     confidence: Confidence = RULES[ruleId].confidence,
+    evidence: EvidenceKind | null = null,
   ): void {
     const rule = RULES[ruleId];
-    // Code behind a browser-only guard cannot run during SSR: keep it for audits only.
-    const guarded = this.clientOnlyDepth > 0;
-    const level: Confidence = guarded ? 'low' : confidence;
+    // Code behind a browser-only guard cannot run during SSR, and positive evidence (dedupe set,
+    // argument-keyed cache, request-lifetime entry, browser dereference) means the write is not a
+    // cross-request leak: keep those for audits only.
+    const note =
+      this.clientOnlyDepth > 0 ? GUARDED_NOTE : evidence ? EVIDENCE_NOTES[evidence] : null;
+    const level: Confidence = note ? 'low' : confidence;
     // Low-confidence findings are informational: only with `all`.
     if (level === 'low' && !this.options.all) return;
     const start = node.getStart(this.sf);
@@ -457,7 +489,7 @@ class FileAnalyzer {
       ruleId: rule.id,
       rule: rule.name,
       confidence: level,
-      message: guarded ? `${rule.message(vars)} ${GUARDED_NOTE}` : rule.message(vars),
+      message: note ? `${rule.message(vars)} ${note}` : rule.message(vars),
       fixHint: rule.fixHint,
       snippet: truncate(lineText, 160),
     });

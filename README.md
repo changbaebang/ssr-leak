@@ -119,8 +119,13 @@ misconfigured CI job cannot pass silently. Pass `--allow-empty` to get exit 0 in
 `medium` finding is visible but does not fail CI until you opt in with `--fail-on medium`.
 
 **Request primitives** (R4 `high`): calls to `headers()`, `cookies()`, `draftMode()`, `getServerSession()` (plus
-`taintSources.functions`); property reads on identifiers named `req`, `request`, `ctx`, `context`, `params`,
-`searchParams`, `event` (plus `taintSources.identifiers`); and parameters of recognized SSR entry points:
+`taintSources.functions`); property reads on identifiers named `req`, `request`, `ctx`, `context` (plus
+`taintSources.identifiers`); property reads on `params`, `searchParams`, `event` **unless** the identifier is a
+parameter of a plain function and the member is not request-like (`searchParams.get('tab')` in a helper is only a
+bare-parameter source; `params.cookies`, `event.headers` and any read on an SSR entry point's parameter stay
+primitive — the request-like members are `headers`, `cookies`, `authorization`, `session`, `user`, `token`,
+`body`, `query`, `url`, `ip`, `locale`, `req`, `request` and their singulars); and parameters of recognized SSR
+entry points:
 `getServerSideProps`, `getStaticProps`, `getInitialProps` (also when wrapped: `export const getServerSideProps =
 withAuth(async (ctx) => …)`), exported `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` route handlers, exported
 `middleware`, the default export of a `pages/api/**` file, and a default-exported function with parameters in
@@ -324,6 +329,18 @@ Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no 
    tainted. Each taint carries its **provenance**: a request primitive (taint-source call, taint identifier,
    parameter of an SSR entry point) wins over a bare parameter, and R4's confidence follows it (`high` vs
    `medium`).
+   **Positive evidence.** Four shapes prove that a write in the request path is not a cross-request leak; the
+   finding is then reported at `low` with a note (visible with `--all`):
+   - *dedupe set* — `set.add(x)` in a function that also calls `set.has(…)` on the same collection;
+   - *argument-keyed cache* — `map.set(k, v)` where only `k` is (weakly) tainted and `v` does not derive from
+     request data (`stores.set(id, createStore())`, `listeners.set(id, new Set())`);
+   - *request-lifetime entry* — the same function also calls `.delete(…)` on the collection
+     (`inFlight.set(id, p.finally(() => inFlight.delete(id)))`, subscribe/unsubscribe pairs);
+   - *browser dereference* — on every path to the write inside the innermost function, an **unconditional**
+     access to `window`, `document`, `location`, `localStorage`, `sessionStorage`, `history` or `screen` (also via
+     `globalThis.`) happens first. Such an access throws a ReferenceError on the server, so the write cannot run
+     there. `typeof x`, optional chains, the right side of `&&` / `||` / `??`, ternary branches, `try` blocks and
+     nested functions do not count; `navigator` and `self` are excluded because server runtimes define them.
 9. **Suppression** is checked on the finding's line before it is recorded (`-- reason` suffixes are ignored);
    low-confidence findings are dropped unless `--all`.
 
@@ -337,6 +354,14 @@ These are deliberate and documented here so you can decide whether they fit your
   (`listeners.add(listener)`), a DI setter, a memo cache keyed by its argument — is `medium`, because the tool
   cannot tell whether that function runs during SSR. It is still shown by default; fail on it with
   `--fail-on medium`. Consequently R5 (untainted write) is `low`, R2 stays `low`, R6 stays `medium`.
+- **`params` / `searchParams` / `event` are weak names on a plain function's parameter.** They are everyday
+  browser-side names (a `URLSearchParams`, a DOM event, router params), so a helper like
+  `save(searchParams) { mirror[key] = searchParams.get('tab') }` is `medium`, not `high`. `req` / `ctx` stay
+  strong, request-like members (`params.cookies`) stay strong, and SSR entry points are unaffected.
+- **Positive evidence downgrades, it never deletes.** Dedupe sets, argument-keyed caches, request-lifetime
+  entries and writes behind a browser dereference are still recorded at `low` with the reason in the message, so
+  `--all` remains a complete audit list. Cost: a `.has()` check that guards a *different* key, or a `.delete()` on
+  another code path, still counts as evidence.
 - **Build outputs, static assets and minified code are skipped by default** (directory list under "Install &
   usage", `*.min.js`, lines over 2000 characters). Minified bundles produce hundreds of meaningless findings and
   static assets are never SSR modules. Override with `exclude` / `include`.
@@ -385,11 +410,12 @@ These are deliberate and documented here so you can decide whether they fit your
 
 ### Known false positives
 
-- **Setters, subscriptions, DI setters and argument-keyed memo caches** (`set(next) { payload = next }`,
-  `listeners.add(listener)`, `setHeaderProvider(p) { provider = p }`, `iconCache.set(icon, …)`,
-  `inFlight.set(userId, promise)`): reported as R4 `medium`. Most are browser-only or process-wide by design; the
-  tool cannot see who calls them. Review once, then suppress with a reason or move on — they do not fail CI at the
-  default `--fail-on high`.
+- **Setters and DI setters** (`set(next) { payload = next }`, `setHeaderProvider(p) { provider = p }`) and caches
+  whose stored value derives from the argument (`iconCache.set(icon, lazy(load(icon)))`): reported as R4
+  `medium`. Most are browser-only or process-wide by design; the tool cannot see who calls them. Review once, then
+  suppress with a reason or move on — they do not fail CI at the default `--fail-on high`. (Dedupe sets, caches
+  whose value is not request data, and subscribe/unsubscribe pairs are recognized as evidence and reported at
+  `low`; see "How it works".)
 - **`useCallback` / event-handler bodies** in components without `'use client'`: same as above — a component prop
   written into module scope inside a callback is R4 `medium`, although the callback never runs during SSR.
 - **Browser-only modules in the Pages Router** (no `'use client'` directive exists there): a module that stores

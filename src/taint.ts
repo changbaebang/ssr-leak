@@ -18,6 +18,37 @@ export const DEFAULT_TAINT_IDENTIFIERS: readonly string[] = [
   'event',
 ];
 
+/**
+ * Taint identifiers that are also ordinary browser-side names (`event` handlers, router `params`,
+ * a `URLSearchParams`). When one of these is a *parameter of a function that is not an SSR entry
+ * point*, it only counts as a request primitive if the accessed member looks like request data;
+ * otherwise it is a bare-parameter (weak) source.
+ */
+export const WEAK_TAINT_IDENTIFIERS: ReadonlySet<string> = new Set([
+  'params',
+  'searchParams',
+  'event',
+]);
+
+/** Members that mark a value as request data even on a weakly named parameter. */
+export const REQUEST_MEMBERS: ReadonlySet<string> = new Set([
+  'headers',
+  'header',
+  'cookies',
+  'cookie',
+  'authorization',
+  'session',
+  'user',
+  'token',
+  'body',
+  'query',
+  'url',
+  'ip',
+  'locale',
+  'req',
+  'request',
+]);
+
 export interface TaintContext {
   fnStack: FnScope[];
   moduleScope: ModuleScope;
@@ -78,9 +109,10 @@ function taintOfIdentifier(id: ts.Identifier, ctx: TaintContext, state: TaintSta
   const name = id.text;
   const res = resolveName(name, ctx.fnStack, ctx.moduleScope);
   if (res.type === 'param') {
+    const namedLikeRequest = ctx.taintIdentifiers.has(name) && !WEAK_TAINT_IDENTIFIERS.has(name);
     return {
       source: `parameter \`${name}\``,
-      primitive: res.scope.isSsrEntry || ctx.taintIdentifiers.has(name),
+      primitive: res.scope.isSsrEntry || namedLikeRequest,
     };
   }
   if (res.type === 'local') {
@@ -153,8 +185,16 @@ function compute(node: ts.Node, ctx: TaintContext, state: TaintState): Taint | n
     if (ts.isIdentifier(base) && ctx.taintIdentifiers.has(base.text)) {
       const res = resolveName(base.text, ctx.fnStack, ctx.moduleScope);
       if (res.type !== 'module') {
-        const member = ts.isPropertyAccessExpression(node) ? `.${node.name.text}` : '[...]';
-        return { source: `\`${base.text}${member}\``, primitive: true };
+        const memberName = ts.isPropertyAccessExpression(node) ? node.name.text : null;
+        const member = memberName ? `.${memberName}` : '[...]';
+        // `searchParams.get('x')` on a plain function's parameter is not request data by itself;
+        // `event.headers` / `params.cookies` still are, and so is anything on `req` / `ctx`.
+        const weakParam =
+          res.type === 'param' &&
+          !res.scope.isSsrEntry &&
+          WEAK_TAINT_IDENTIFIERS.has(base.text) &&
+          !(memberName && REQUEST_MEMBERS.has(memberName));
+        return { source: `\`${base.text}${member}\``, primitive: !weakParam };
       }
     }
     if (ts.isElementAccessExpression(node)) {

@@ -118,8 +118,12 @@ pnpm ssr-leak src app pages lib
 `medium` 발견은 보이기는 하지만 `--fail-on medium`으로 선택하기 전까지 CI를 실패시키지 않습니다.
 
 **요청 프리미티브**(R4 `high`): `headers()`, `cookies()`, `draftMode()`, `getServerSession()` 호출(+
-`taintSources.functions`); `req`, `request`, `ctx`, `context`, `params`, `searchParams`, `event`라는 이름의
-식별자에 대한 프로퍼티 읽기(+ `taintSources.identifiers`); 그리고 인식된 SSR 진입점의 파라미터:
+`taintSources.functions`); `req`, `request`, `ctx`, `context`라는 이름의 식별자에 대한 프로퍼티 읽기(+
+`taintSources.identifiers`); `params`, `searchParams`, `event`에 대한 프로퍼티 읽기 — **단** 그 식별자가 일반 함수의
+파라미터이고 멤버가 요청스럽지 않으면 제외(헬퍼의 `searchParams.get('tab')`은 맨 파라미터 소스일 뿐이고,
+`params.cookies`, `event.headers`, SSR 진입점 파라미터에 대한 모든 읽기는 프리미티브로 남습니다 — 요청스러운 멤버는
+`headers`, `cookies`, `authorization`, `session`, `user`, `token`, `body`, `query`, `url`, `ip`, `locale`, `req`,
+`request`와 그 단수형); 그리고 인식된 SSR 진입점의 파라미터:
 `getServerSideProps`, `getStaticProps`, `getInitialProps`(래핑된 경우 포함: `export const getServerSideProps =
 withAuth(async (ctx) => …)`), export된 `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` 라우트 핸들러,
 export된 `middleware`, `pages/api/**` 파일의 default export, `app/**/page|layout|template.*`에서 파라미터를 받는
@@ -315,6 +319,18 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
    이항/조건 표현식, 객체/배열 리터럴, `new`. 함수·클래스 표현식은 절대 오염되지 않습니다. 각 오염은
    **출처**를 갖습니다: 요청 프리미티브(오염 소스 호출, 오염 식별자, SSR 진입점의 파라미터)가 맨 파라미터보다
    우선하며 R4의 신뢰도가 이를 따릅니다(`high` vs `medium`).
+   **긍정 증거.** 요청 경로에 있는 쓰기가 요청 간 누수가 아님을 증명하는 모양 네 가지가 있으며, 해당하면 발견을
+   설명과 함께 `low`로 보고합니다(`--all`로 표시):
+   - *중복 억제 Set* — 같은 컬렉션에 `set.has(…)`도 호출하는 함수 안의 `set.add(x)`;
+   - *인자 키 캐시* — `k`만 (약하게) 오염되고 `v`는 요청 데이터에서 유래하지 않는 `map.set(k, v)`
+     (`stores.set(id, createStore())`, `listeners.set(id, new Set())`);
+   - *요청 수명 항목* — 같은 함수가 그 컬렉션에 `.delete(…)`도 호출
+     (`inFlight.set(id, p.finally(() => inFlight.delete(id)))`, subscribe/unsubscribe 쌍);
+   - *브라우저 참조* — 가장 안쪽 함수에서 쓰기에 이르는 모든 경로에서 `window`, `document`, `location`,
+     `localStorage`, `sessionStorage`, `history`, `screen`(`globalThis.` 경유 포함)에 대한 **무조건적** 접근이 먼저
+     일어남. 이런 접근은 서버에서 ReferenceError를 던지므로 쓰기가 서버에서 실행될 수 없습니다. `typeof x`, 옵셔널
+     체인, `&&` / `||` / `??`의 오른쪽, 삼항 분기, `try` 블록, 중첩 함수는 세지 않으며, `navigator`·`self`는 서버
+     런타임이 정의하므로 제외합니다.
 9. **억제**는 발견을 기록하기 전에 해당 줄에서 확인하고(`-- 사유` 접미사는 무시), 낮은 신뢰도 발견은 `--all`이
    아니면 버립니다.
 
@@ -327,6 +343,13 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
   구독(`listeners.add(listener)`), DI setter, 인자를 키로 쓰는 메모 캐시 — 는 `medium`입니다. 그 함수가 SSR 중
   실행되는지 도구가 알 수 없기 때문입니다. 기본으로 표시되며 `--fail-on medium`으로 실패시킬 수 있습니다. 그에 따라
   R5(오염되지 않은 쓰기)는 `low`, R2는 `low` 유지, R6은 `medium` 유지입니다.
+- **`params` / `searchParams` / `event`는 일반 함수 파라미터에서는 약한 이름입니다.** 브라우저 쪽에서 흔한
+  이름(`URLSearchParams`, DOM 이벤트, 라우터 params)이라 `save(searchParams) { mirror[key] = searchParams.get('tab') }`
+  같은 헬퍼는 `high`가 아니라 `medium`입니다. `req` / `ctx`는 강한 이름으로, 요청스러운 멤버(`params.cookies`)도 강하게,
+  SSR 진입점은 영향 없이 유지됩니다.
+- **긍정 증거는 낮추기만 하고 지우지 않습니다.** 중복 억제 Set, 인자 키 캐시, 요청 수명 항목, 브라우저 참조 뒤의 쓰기는
+  사유를 메시지에 담아 `low`로 남기므로 `--all`은 여전히 완전한 감사 목록입니다. 비용: *다른* 키를 지키는 `.has()`
+  검사나 다른 경로의 `.delete()`도 증거로 셉니다.
 - **빌드 산출물, 정적 자산, 압축 코드는 기본으로 건너뜁니다**("설치 & 사용"의 디렉터리 목록, `*.min.js`, 2000자
   넘는 줄). 압축 번들은 의미 없는 발견을 수백 개 만들고 정적 자산은 SSR 모듈이 아닙니다. `exclude` / `include`로
   바꿀 수 있습니다.
@@ -371,10 +394,11 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 
 ### 알려진 오탐
 
-- **setter, 구독, DI setter, 인자 키 메모 캐시**(`set(next) { payload = next }`, `listeners.add(listener)`,
-  `setHeaderProvider(p) { provider = p }`, `iconCache.set(icon, …)`, `inFlight.set(userId, promise)`): R4 `medium`으로
-  보고됩니다. 대부분 브라우저 전용이거나 의도된 프로세스 전역 상태지만 도구는 누가 호출하는지 볼 수 없습니다.
-  한 번 검토한 뒤 사유와 함께 억제하거나 넘어가세요 — 기본 `--fail-on high`에서는 CI를 실패시키지 않습니다.
+- **setter와 DI setter**(`set(next) { payload = next }`, `setHeaderProvider(p) { provider = p }`), 저장 값이 인자에서
+  유래하는 캐시(`iconCache.set(icon, lazy(load(icon)))`): R4 `medium`으로 보고됩니다. 대부분 브라우저 전용이거나 의도된
+  프로세스 전역 상태지만 도구는 누가 호출하는지 볼 수 없습니다. 한 번 검토한 뒤 사유와 함께 억제하거나 넘어가세요 —
+  기본 `--fail-on high`에서는 CI를 실패시키지 않습니다. (중복 억제 Set, 값이 요청 데이터가 아닌 캐시,
+  subscribe/unsubscribe 쌍은 증거로 인식해 `low`로 보고합니다 — "동작 원리" 참고.)
 - **`'use client'`가 없는 컴포넌트의 `useCallback` / 이벤트 핸들러 본문**: 위와 같습니다 — 콜백 안에서 컴포넌트
   prop을 모듈 스코프에 쓰면 그 콜백이 SSR 중 실행되지 않더라도 R4 `medium`입니다.
 - **Pages Router의 브라우저 전용 모듈**(`'use client'` 디렉티브가 없음): 스크롤 위치나 popstate 리스너를 모듈
