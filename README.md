@@ -90,6 +90,119 @@ Default: every `*.{ts,tsx,js,jsx,mjs,cjs}` under the current directory, skipping
 An empty input set is an error: a positional path that does not exist, or globs that match nothing, exit 2 so a
 misconfigured CI job cannot pass silently. Pass `--allow-empty` to get exit 0 instead.
 
+## Requirements & compatibility
+
+Use this section to decide whether ssr-leak applies to your project before running it. Every row was verified
+against a fixture in the test suite (`test/fixtures/entries`, `test/fixtures/syntax`, `test/fixtures/r1`…).
+
+### What "SSR entry point" means
+
+The tool never proves that a function runs during SSR. It recognizes a fixed list of **entry points** by name,
+export shape and file path; a parameter of an entry point is a *request primitive* (R4 `high`). Everything
+else is analyzed too, but a bare parameter of an unrecognized function only gives `medium`, and a write with
+no request-derived value is R5 (`--all`).
+
+| Framework / convention | Recognized as an entry point | Notes |
+| --- | --- | --- |
+| Next.js Pages Router (9–16) | `getServerSideProps`, `getStaticProps`, `getInitialProps` — also wrapped (`export const getServerSideProps = withAuth(async (ctx) => …)`) and assigned (`Page.getInitialProps = …`); the default export of any `pages/api/**` file that takes parameters | `getStaticProps` runs at build time and on revalidation, not per request; it is still an entry because its `params`/`preview` data must not be written to module state. |
+| Next.js App Router (13.4–16) | exported `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` (by export name, in **any** file — the `route.ts` filename is not required); the default export of `app/**/page|layout|template|default.*` that takes parameters; exported `generateMetadata` / `generateViewport` | `loading`, `error`, `not-found`, `global-error` receive no request data and are not entries (a bare prop there is `medium`). `generateStaticParams` runs at build time and is not an entry. `after()` callbacks are analyzed as ordinary nested functions. |
+| Next.js Server Actions / Server Functions (13.4+) | a file whose directive prologue contains `'use server'`: every **exported** function; any function whose first statement is `'use server'`, at any nesting depth | A non-exported function in a `'use server'` file is a plain helper. `export { fn }` lists after the declaration are not followed — use `export function` / `export const`. |
+| Next.js middleware / proxy (12.2–16) | exported `middleware` or `proxy` (any file); the default export of a `middleware.*` / `proxy.*` file that takes parameters | Next 16 renamed `middleware.ts` to `proxy.ts` and the function to `proxy`; both spellings are recognized ([Next.js docs, proxy.js](https://nextjs.org/docs/app/api-reference/file-conventions/proxy)). |
+| Next.js `instrumentation.ts` | not an entry | `register()` runs once per process. `onRequestError(err, request, ctx)` is covered by the `request` / `ctx` name heuristic, not by the file. |
+| Remix / React Router (framework mode) | exported `loader` / `action` whose first parameter destructures `request`, `params` or `context` (`export async function loader({ request, params }) …`) | Destructured parameters are ordinary parameters to the analyzer, so `request.url` inside is `high`. An exported `loader` without such a parameter is left alone. `clientLoader` / `clientAction` are not entries. |
+| Any Node server code (Express, Fastify, Koa, Hono, Nitro, Vite SSR, custom `server.ts`) | no entry points; the taint **name heuristics** apply: property reads on `req`, `request`, `ctx`, `context` (and `params`, `searchParams`, `event` with a request-like member) are request primitives wherever they appear, so `(req, res) => { last = req.headers.host }` is R4 `high` | Extend with `taintSources.identifiers` / `taintSources.functions` in the config for your own names (`c.req`, `getSession()`). A handler whose parameter is named `foo` is `medium`. |
+| Nuxt / SvelteKit / Astro / Vue SFC / Angular | not supported | `.vue`, `.svelte`, `.astro` files are not parsed. Plain `.ts` server utilities in those projects are analyzed with the name heuristics only. |
+
+### HTTP clients
+
+| Shape | R1 / R2 / R3 |
+| --- | --- |
+| `import axios from 'axios'`, `import * as axios from 'axios'` (`axios.default.defaults`), `import axios = require('axios')`, `const axios = require('axios')` | yes |
+| `axios.create(…)`, `create(…)` with `import { create } from 'axios'` / `const { create } = require('axios')`, assigned to a module-level binding | yes |
+| An instance imported from another module (`import { api } from './client'`) | `api.defaults.headers…` → R1; `api.interceptors.request.use(…)` → R3; `api.defaults.baseURL = …` → R4 when the value is tainted, otherwise R5 (`--all`) |
+| An instance created inside the function (`const api = axios.create()` in the handler) | not a finding (per-request instance) |
+| An instance held in a module-level `let` assigned later (`let api; function init() { api = axios.create() }`) | R4/R5 on the assignment; later `api.defaults` writes are not R1 |
+| `axios-retry`, `interceptors.eject`, `interceptors.clear` | `axiosRetry(axios, …)` is an ordinary call (not a finding). An interceptor registered and ejected in the same function is not R3. |
+| `ky`, `got`, `superagent`, `fetch` wrappers, `ofetch`, GraphQL clients | not recognized as HTTP clients. A write into their module-level instance is still R4 (tainted) / R5, so `k.defaults = req.x` is reported, but "instance created per request" is not understood. |
+
+### Languages, syntax, files
+
+- **Extensions**: `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`. `.d.ts` is skipped. `.js` files are parsed with JSX
+  enabled (the TypeScript parser's JS mode), so React code in `.js` works.
+- **Syntax**: everything TypeScript 5.x parses — decorators (legacy and standard), `satisfies`, `using`,
+  `enum` / `namespace`, class fields and `accessor`, `export =`, `import x = require()`, CommonJS
+  `module.exports`. No Flow, no Vue/Svelte/Astro single-file components.
+- **Syntax errors** do not stop the run. The TypeScript parser recovers; the file is analyzed as far as it
+  parsed and a `parse-error` diagnostic is reported (see "How it fails").
+- **Module systems**: ESM and CommonJS. `require('axios')` and `const { create } = require('axios')` are
+  recognized; dynamic `import()` results are not tracked.
+- **Config file**: `ssr-leak.config.json` / `.mjs` / `.js` / `.cjs` in `--root` (first match wins), or `--config
+  <path>`. Keys: `ignore`, `exclude`, `include` (string arrays of globs / directory basenames), `taintSources`
+  (`{ functions?, identifiers? }`), `guards` (`{ server?, client? }`). Any other key is a config error (exit 2).
+- **Runtime**: Node 20, 22 and 24 (CI runs 20 and 22; 24 is used for development). Windows is untested — paths
+  are normalized to `/` internally, but no CI job runs there.
+- **Size**: ~13,600 files in about 4–5 s and ~260 MB RSS on a laptop (a large monorepo, single-threaded, parser
+  only, no type checker). Files are read and parsed one at a time; memory does not grow with the tree beyond the
+  findings list.
+
+### What is detected / not detected
+
+Detected (see "Rules" for the exact shapes): writes to `<axios>.defaults.*`, `<axios>.interceptors.*.use()`,
+module-level `let` / `var` reassignment, property assignment on module-level bindings, `set/add/push/…` on
+module-level `Map` / `Set` / `Array` literals, `Object.assign(moduleObject, …)`, `globalThis.*` / `global.*` /
+`process.env.*` — inside a function that is not module init, with the taint provenance of the written value.
+
+Not detected: leaks through **another module** (a `store.ts` with exported setters — analyze that file; the
+write site must be syntactically visible), closures stored at module scope, class instances stored at module
+scope and mutated via `this`, collections created by a factory (`const cache = createLRU()`), module-level
+`let` that is assigned an axios instance later, functions registered by a top-level `app.use(…)` (treated as
+module init), `'use client'` files without `--include-client`. See "Known false negatives".
+
+### How it fails
+
+The CLI never prints a stack trace for an input problem; every message is one line on stderr. Anything that
+would make a clean run misleading exits 2.
+
+| Exit | Condition | stderr (prefix) |
+| --- | --- | --- |
+| 2 | unknown option / bad value | `error: Unknown option '--x'`, `error: --fail-on must be one of high, medium, low, none (got "x")` |
+| 2 | config file problem | `error: config file not found: <path>`, `error: <file>: invalid JSON (…)`, `error: <file>: failed to load (…)`, `error: <file>: unknown key(s) a, b`, `error: <file>: "ignore" must be string[]`, `error: <file>: "taintSources.functions" must be string[]`, `error: <file>: "guards.server" must be string[]` |
+| 2 (0 with `--allow-empty`) | a positional path does not exist | `error: path not found: <pattern> (relative to <root>)` (`missing-path`) |
+| 2 (0 with `--allow-empty`) | no file was analyzed | `error: no files to analyze: <patterns> matched nothing under <root>` (`empty-input`) |
+| 2 (0 with `--allow-empty`) | every analyzed file has syntax errors | `error: no file parsed cleanly: all N analyzed file(s) under <root> have syntax errors` (`empty-input`) |
+| 2 | a discovered file cannot be read | `error: cannot read <file>: EACCES` (`unreadable-file`) |
+| unchanged | a file has syntax errors but others parsed | `warning: syntax error in <file>:<line>:<col>: <message> (+N more); analyzed as far as it parsed` (`parse-error`) |
+| 2 | an unexpected exception | `error: <stack>` — please report it with `--env` output |
+
+Every diagnostic is also in `report.diagnostics` (`--json`) with its `kind`. Minified files (`*.min.js`, a line
+longer than 2000 characters) and `'use client'` files are skipped silently — name them explicitly or use
+`include` / `--include-client`.
+
+`ssr-leak --env` prints what a bug report needs and exits 0 (exit 2 if the config file is invalid):
+
+```
+ssr-leak: 0.2.0
+node: v22.12.0 (linux x64)
+typescript: 5.9.3
+root: /work/app
+config file: /work/app/ssr-leak.config.json
+default pattern: **/*.{ts,tsx,js,jsx,mjs,cjs}
+excluded directories: node_modules, dist, build, out, .next, .vercel, .output, .turbo, .cache, .git, coverage, storybook-static, public, mocks, __mocks__
+config ignore: (none)
+config include: (none)
+server guards: isServer, isSSR, isServerSide
+client guards: isClient, isBrowser, isClientSide, canUseDOM
+taint functions: headers, cookies, draftMode, getServerSession
+taint identifiers: req, request, ctx, context, params, searchParams, event
+rules:
+  R1 axios-defaults-in-function [high]
+  R2 axios-defaults-at-module-scope [low, --all only]
+  R3 axios-interceptor-in-request-path [high]
+  R4 module-state-write-tainted [high]
+  R5 module-state-write-untainted [low, --all only]
+  R6 global-object-write [medium]
+```
+
 ## CLI options
 
 | Option | Description |
@@ -102,6 +215,7 @@ misconfigured CI job cannot pass silently. Pass `--allow-empty` to get exit 0 in
 | `--config <path>` | Config file, resolved relative to `--root`. Default: `ssr-leak.config.{json,mjs,js,cjs}` in `--root`, if present. |
 | `--fail-on <level>` | Exit 1 when any finding is at or above `high` (default), `medium`, `low`; `none` never fails. |
 | `--allow-empty` | Exit 0 instead of 2 when no file was analyzed or a positional path does not exist. |
+| `--env` | Print the environment for a bug report (versions, root, config file, defaults, rule list) and exit 0. |
 | `-h, --help` / `-v, --version` | Help / version. |
 
 ## Rules
@@ -128,8 +242,11 @@ primitive — the request-like members are `headers`, `cookies`, `authorization`
 entry points:
 `getServerSideProps`, `getStaticProps`, `getInitialProps` (also when wrapped: `export const getServerSideProps =
 withAuth(async (ctx) => …)`), exported `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` route handlers, exported
-`middleware`, the default export of a `pages/api/**` file, and a default-exported function with parameters in
-`app/**/page|layout|template.*`.
+`middleware` / `proxy` (or the default export of a `middleware.*` / `proxy.*` file), exported `generateMetadata` /
+`generateViewport`, Server Actions (exported functions of a `'use server'` file, or a function starting with
+`'use server'`), Remix / React Router `loader` / `action` taking `{ request | params | context }`, the default
+export of a `pages/api/**` file, and a default-exported function with parameters in
+`app/**/page|layout|template|default.*`. The full matrix is under "Requirements & compatibility".
 
 ### Suppression
 
@@ -228,8 +345,8 @@ src/lib/store.ts:4:3  R4 module-state-write-tainted [medium]  Possible per-reque
 ```
 
 `file` is relative to `root` with `/` separators; `line`/`column` are 1-based. `diagnostics` lists input problems
-(`{ "kind": "missing-path" | "empty-input" | "unreadable-file", "path"?, "message" }`); the CLI also prints them
-on stderr. The shape is stable within a major version; new fields may be added.
+(`{ "kind": "missing-path" | "empty-input" | "unreadable-file" | "parse-error", "path"?, "message" }`); the CLI
+also prints them on stderr (`parse-error` is a warning and does not change the exit code). The shape is stable within a major version; new fields may be added.
 
 ## Exit codes
 
@@ -237,9 +354,11 @@ on stderr. The shape is stable within a major version; new fields may be added.
 | --- | --- |
 | 0 | No finding at or above `--fail-on` |
 | 1 | At least one finding at or above `--fail-on` (default `high`) |
-| 2 | Usage or config error (unknown option, bad `--fail-on`, invalid or missing config file); a positional path that does not exist or an empty input set (unless `--allow-empty`); a file that could not be read |
+| 2 | Usage or config error (unknown option, bad `--fail-on`, invalid or missing config file); a positional path that does not exist, an empty input set, or every analyzed file having syntax errors (unless `--allow-empty`); a file that could not be read |
 
-Errors that exit 2 are printed as one line on stderr, without a stack trace.
+Errors that exit 2 are printed as one line on stderr, without a stack trace. A file with syntax errors is
+analyzed as far as it parsed and printed as a `warning:`; it does not change the exit code by itself. The exact
+messages are listed under "How it fails".
 
 ## Programmatic API
 
@@ -280,8 +399,9 @@ work in both module systems.
 
 Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no cross-file resolution.
 
-1. **Parse** with `ts.createSourceFile` (script kind from the extension; `.js`/`.mjs`/`.cjs` parse as JS,
-   `.jsx`/`.tsx` with JSX).
+1. **Parse** with `ts.createSourceFile` (script kind from the extension; `.js`/`.mjs`/`.cjs` parse as JS with
+   JSX enabled, `.jsx`/`.tsx` with JSX). The parser is error-tolerant: a file with syntax errors is analyzed as
+   far as it parsed and reported as a `parse-error` diagnostic with the first error's position.
 2. **File gates.** Skip when a `ssr-leak-disable` comment precedes the first statement, or when the directive
    prologue contains `'use client'` (unless `--include-client`; remember that client components are still
    server-rendered — this gate only reduces noise). Test and story files, excluded directories and minified files
@@ -294,7 +414,9 @@ Everything is syntactic plus a small binder; no type checker, no `tsconfig`, no 
    gets a scope holding its parameter names, the names declared in its body, and every expression assigned to
    each local (initializers, `=`, destructuring, `for…of` sources). Blocks are not modeled separately: a name
    declared anywhere in the function body is local to the function. This is imprecise in the direction that
-   produces **fewer** findings. The scope also records whether the function is a recognized SSR entry point.
+   produces **fewer** findings. The scope also records whether the function is a recognized SSR entry point
+   (by bound name and export shape, by file path for default exports, or by a `'use server'` directive — see
+   "Requirements & compatibility").
 5. **Name resolution.** An identifier is resolved from the innermost function scope outward, then module scope,
    otherwise "unresolved" (`globalThis`, `process`, `Object`, undeclared globals).
 6. **Request path.** A node is "in the request path" when at least one function encloses it, and none of the

@@ -4,6 +4,29 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [Unreleased]
+
+### Added
+
+- New SSR entry points (parameters are request primitives, R4 `high`): Server Actions (`'use server'` at file
+  level → every exported function; as a function's first statement → that function, at any depth), Next 16
+  `proxy` (exported `proxy`, or the default export of `middleware.*` / `proxy.*`), exported `generateMetadata` /
+  `generateViewport`, `app/**/default.*` default exports, and Remix / React Router `loader` / `action` whose first
+  parameter destructures `request`, `params` or `context`. Exported: `isServerActionFile`.
+- `parse-error` diagnostic: a file with syntax errors is analyzed as far as it parsed and reported in
+  `report.diagnostics` (`kind: 'parse-error'`, path, first message and position). The CLI prints it as a warning
+  without changing the exit code; when every analyzed file has syntax errors an `empty-input` diagnostic is added
+  (exit 2 unless `--allow-empty`). Exported: `analyzeSourceDetailed`, `ParseError`, `SourceAnalysis`.
+- `--env`: prints versions (ssr-leak, Node, TypeScript), root, config file, default pattern, excluded
+  directories, guard names, taint sources and the rule list for bug reports; exit 0.
+- README "Requirements & compatibility": framework / HTTP client / syntax / runtime support matrix, what is and
+  is not detected, and every exit-2 condition and diagnostic with its exact message prefix.
+
+### Fixed
+
+- `import * as axios from 'axios'` followed by `axios.default.defaults.headers… = …` inside a function is now R1
+  (it was R4/R5 because the `.default` hop hid the `.defaults` path).
+
 ## [0.2.0] - 2026-09-17
 
 ### Added

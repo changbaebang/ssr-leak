@@ -256,10 +256,13 @@ class FileAnalyzer {
   }
 
   private isAxiosDefaults(binding: ModuleBinding, chain: Chain): boolean {
-    if (chain.parts[0]?.name !== 'defaults') return false;
+    // `import * as axios from 'axios'` exposes the instance as `axios.default`.
+    const parts =
+      binding.isAxios && chain.parts[0]?.name === 'default' ? chain.parts.slice(1) : chain.parts;
+    if (parts[0]?.name !== 'defaults') return false;
     if (binding.isAxios) return true;
     // A shared client imported from another module: `.defaults.headers` is distinctive enough.
-    return binding.kind === 'import' && chain.parts[1]?.name === 'headers';
+    return binding.kind === 'import' && parts[1]?.name === 'headers';
   }
 
   /**
@@ -496,15 +499,32 @@ class FileAnalyzer {
   }
 }
 
+/** The first syntax error the TypeScript parser reported for a file (1-based position). */
+export interface ParseError {
+  line: number;
+  column: number;
+  message: string;
+  /** Total number of syntax errors in the file. */
+  count: number;
+}
+
+export interface SourceAnalysis {
+  findings: Finding[];
+  /** Set when the parser reported syntax errors. The file is still analyzed (the parser recovers). */
+  parseError?: ParseError;
+  /** True when the file was skipped: `ssr-leak-disable`, or `'use client'` without `includeClient`. */
+  skipped: boolean;
+}
+
 /**
- * Analyzes one file's source text. `fileName` selects the parser (ts/tsx/js/jsx) and is echoed
- * back in `Finding.file`. Pure: no filesystem access.
+ * Like `analyzeSource`, but also reports whether the file had syntax errors or was skipped.
+ * Pure: no filesystem access.
  */
-export function analyzeSource(
+export function analyzeSourceDetailed(
   code: string,
   fileName: string,
   options: AnalyzeOptions = {},
-): Finding[] {
+): SourceAnalysis {
   const sf = ts.createSourceFile(
     fileName,
     code,
@@ -512,7 +532,36 @@ export function analyzeSource(
     true,
     scriptKindOf(fileName),
   );
-  if (hasFileDisable(sf)) return [];
-  if (!options.includeClient && isClientFile(sf)) return [];
-  return new FileAnalyzer(sf, fileName, options).run();
+  let parseError: ParseError | undefined;
+  // `parseDiagnostics` is populated by the parser but not part of the public `SourceFile` type;
+  // it is the only way to see syntax errors without building a Program.
+  const diagnostics =
+    (sf as ts.SourceFile & { parseDiagnostics?: ts.DiagnosticWithLocation[] }).parseDiagnostics ??
+    [];
+  const first = diagnostics[0];
+  if (first) {
+    const { line, character } = sf.getLineAndCharacterOfPosition(first.start);
+    parseError = {
+      line: line + 1,
+      column: character + 1,
+      message: ts.flattenDiagnosticMessageText(first.messageText, ' '),
+      count: diagnostics.length,
+    };
+  }
+  const skipped = hasFileDisable(sf) || (!options.includeClient && isClientFile(sf));
+  const findings = skipped ? [] : new FileAnalyzer(sf, fileName, options).run();
+  return parseError ? { findings, parseError, skipped } : { findings, skipped };
+}
+
+/**
+ * Analyzes one file's source text. `fileName` selects the parser (ts/tsx/js/jsx) and is echoed
+ * back in `Finding.file`. Pure: no filesystem access. Syntax errors do not throw: the parser
+ * recovers and the file is analyzed as far as it parsed (see `analyzeSourceDetailed`).
+ */
+export function analyzeSource(
+  code: string,
+  fileName: string,
+  options: AnalyzeOptions = {},
+): Finding[] {
+  return analyzeSourceDetailed(code, fileName, options).findings;
 }

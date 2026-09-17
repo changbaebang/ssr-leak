@@ -167,3 +167,42 @@ describe('cli (spawned dist/cli.js)', () => {
     }
   });
 });
+
+describe('cli: syntax errors and --env', () => {
+  const SYNTAX = path.join(ROOT, 'test', 'fixtures', 'syntax');
+
+  it('prints a syntax error as a warning and keeps the exit code of the findings', () => {
+    const r = cli(['--root', SYNTAX, '--json']);
+    expect(r.code).toBe(1);
+    expect(r.stderr).toContain(
+      "warning: syntax error in broken.ts:5:1: '}' expected.; analyzed as far as it parsed",
+    );
+    expect(JSON.parse(r.stdout).diagnostics).toHaveLength(1);
+    expect(cli(['--root', SYNTAX, '--fail-on', 'none']).code).toBe(0);
+  });
+
+  it('exits 2 when the only analyzed file has syntax errors, 0 with --allow-empty', () => {
+    const r = cli(['--root', SYNTAX, 'broken.ts', '--fail-on', 'none']);
+    expect(r.code).toBe(2);
+    expect(r.stderr).toContain('error: no file parsed cleanly: all 1 analyzed file(s)');
+    expect(cli(['--root', SYNTAX, 'broken.ts', '--fail-on', 'none', '--allow-empty']).code).toBe(0);
+  });
+
+  it('--env prints the environment and exits 0; exits 2 on a bad config', () => {
+    const r = cli(['--env']);
+    expect(r.code).toBe(0);
+    expect(r.stdout).toMatch(/^ssr-leak: \d+\.\d+\.\d+/m);
+    expect(r.stdout).toMatch(/^node: v\d+/m);
+    expect(r.stdout).toMatch(/^typescript: \d+\.\d+/m);
+    expect(r.stdout).toContain(`root: ${PROJECT}`);
+    expect(r.stdout).toContain('config file: (none; looked for ssr-leak.config.json');
+    expect(r.stdout).toContain('excluded directories: node_modules, dist');
+    expect(r.stdout).toContain('server guards: isServer, isSSR, isServerSide');
+    expect(r.stdout).toContain('taint identifiers: req, request, ctx');
+    expect(r.stdout).toContain('  R2 axios-defaults-at-module-scope [low, --all only]');
+    expect(r.stdout).toContain('  R4 module-state-write-tainted [high]');
+    const bad = cli(['--env', '--config', 'bad-config.json']);
+    expect(bad.code).toBe(2);
+    expect(bad.stderr).toContain('"ignore" must be string[]');
+  });
+});
