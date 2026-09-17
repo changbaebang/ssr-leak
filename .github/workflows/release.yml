@@ -18,7 +18,8 @@ jobs:
         with:
           node-version: 22
           cache: pnpm
-          registry-url: https://registry.npmjs.org
+          # No registry-url here: setup-node would write an empty _authToken to .npmrc and npm would then
+          # skip the OIDC token exchange (403 "OIDC permission denied"). publishConfig.registry pins the target.
       # Trusted publishing (OIDC) needs npm >= 11.5.1; the npm bundled with Node 22 is older.
       - run: npm install -g npm@latest
       - run: pnpm install --frozen-lockfile
