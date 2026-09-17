@@ -4,10 +4,15 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
-## [Unreleased]
+## [0.2.0] - 2026-09-17
 
 ### Added
 
+- Positive-evidence downgrades: a request-path write is reported at `low` (with the reason in the message) when
+  it is a **dedupe set** (`add` guarded by `has` in the same function), an **argument-keyed cache** (`map.set(k, v)`
+  with only `k` weakly tainted), a **request-lifetime entry** (the same function also `delete`s it), or is
+  **preceded by an unconditional browser-only dereference** (`window.location`, `document`, `localStorage`, …,
+  which throws on the server). `navigator` / `self` are not browser-only. Exported: `EVIDENCE_NOTES`.
 - New SSR entry points (parameters are request primitives, R4 `high`): Server Actions (`'use server'` at file
   level → every exported function; as a function's first statement → that function, at any depth), Next 16
   `proxy` (exported `proxy`, or the default export of `middleware.*` / `proxy.*`), exported `generateMetadata` /
@@ -22,21 +27,6 @@ All notable changes to this project are documented here. The format follows
 - README "Requirements & compatibility": framework / HTTP client / syntax / runtime support matrix, what is and
   is not detected, and every exit-2 condition and diagnostic with its exact message prefix.
 
-### Fixed
-
-- `import * as axios from 'axios'` followed by `axios.default.defaults.headers… = …` inside a function is now R1
-  (it was R4/R5 because the `.default` hop hid the `.defaults` path).
-
-## [0.2.0] - 2026-09-17
-
-### Added
-
-- Positive-evidence downgrades: a request-path write is reported at `low` (with the reason in the message) when
-  it is a **dedupe set** (`add` guarded by `has` in the same function), an **argument-keyed cache** (`map.set(k, v)`
-  with only `k` weakly tainted), a **request-lifetime entry** (the same function also `delete`s it), or is
-  **preceded by an unconditional browser-only dereference** (`window.location`, `document`, `localStorage`, …,
-  which throws on the server). `navigator` / `self` are not browser-only. Exported: `EVIDENCE_NOTES`.
-
 ### Changed
 
 - `params`, `searchParams` and `event` are now *weak* taint names when they are a parameter of a function that is
@@ -45,6 +35,11 @@ All notable changes to this project are documented here. The format follows
   `REQUEST_MEMBERS`.
 - On a large Next.js monorepo this took the default output from 6 high / 17 medium to 4 high / 10 medium with
   every true positive kept.
+
+### Fixed
+
+- `import * as axios from 'axios'` followed by `axios.default.defaults.headers… = …` inside a function is now R1
+  (it was R4/R5 because the `.default` hop hid the `.defaults` path).
 
 ## [0.1.0] - 2026-09-16
 
