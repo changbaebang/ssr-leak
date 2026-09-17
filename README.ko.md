@@ -89,6 +89,115 @@ pnpm ssr-leak src app pages lib
 입력 집합이 비면 오류입니다: 존재하지 않는 경로를 지정했거나 glob이 아무것도 못 찾으면 종료 코드 2를 내서
 잘못 설정된 CI 작업이 조용히 통과하지 못하게 합니다. `--allow-empty`를 주면 대신 0으로 끝납니다.
 
+## 요구 사항 & 호환성
+
+실행하기 전에 ssr-leak이 내 프로젝트에 맞는지 이 절로 판단하세요. 모든 행은 테스트 스위트의 픽스처
+(`test/fixtures/entries`, `test/fixtures/syntax`, `test/fixtures/r1`…)로 검증했습니다.
+
+### "SSR 진입점"이란
+
+이 도구는 어떤 함수가 SSR 중에 실행된다는 것을 증명하지 않습니다. 이름·export 형태·파일 경로로 고정된
+**진입점** 목록을 인식하며, 진입점의 파라미터는 *요청 프리미티브*(R4 `high`)입니다. 나머지 함수도 분석하지만,
+인식되지 않은 함수의 맨 파라미터는 `medium`까지만 주고, 요청에서 유래한 값이 없는 쓰기는 R5(`--all`)입니다.
+
+| 프레임워크 / 컨벤션 | 진입점으로 인식 | 비고 |
+| --- | --- | --- |
+| Next.js Pages Router (9–16) | `getServerSideProps`, `getStaticProps`, `getInitialProps` — 래핑(`export const getServerSideProps = withAuth(async (ctx) => …)`)·대입(`Page.getInitialProps = …`) 포함; 파라미터를 받는 `pages/api/**` 파일의 default export | `getStaticProps`는 요청마다가 아니라 빌드·재검증 시 실행되지만, `params`/`preview` 데이터를 모듈 상태에 쓰면 안 되므로 진입점으로 둡니다. |
+| Next.js App Router (13.4–16) | export된 `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS`(export 이름 기준, **어느 파일이든** — `route.ts` 파일명은 필요 없음); 파라미터를 받는 `app/**/page|layout|template|default.*`의 default export; export된 `generateMetadata` / `generateViewport` | `loading`, `error`, `not-found`, `global-error`는 요청 데이터를 받지 않으므로 진입점이 아닙니다(거기서의 맨 prop은 `medium`). `generateStaticParams`는 빌드 타임이라 진입점이 아닙니다. `after()` 콜백은 일반 중첩 함수로 분석합니다. |
+| Next.js Server Actions / Server Functions (13.4+) | 디렉티브 프롤로그에 `'use server'`가 있는 파일: **export된** 모든 함수; 첫 문장이 `'use server'`인 함수(중첩 깊이 무관) | `'use server'` 파일의 export되지 않은 함수는 일반 헬퍼입니다. 선언 뒤의 `export { fn }` 목록은 따라가지 않습니다 — `export function` / `export const`를 쓰세요. |
+| Next.js middleware / proxy (12.2–16) | export된 `middleware` 또는 `proxy`(어느 파일이든); 파라미터를 받는 `middleware.*` / `proxy.*` 파일의 default export | Next 16에서 `middleware.ts`가 `proxy.ts`로, 함수도 `proxy`로 이름이 바뀌었습니다. 두 표기 모두 인식합니다([Next.js 문서, proxy.js](https://nextjs.org/docs/app/api-reference/file-conventions/proxy)). |
+| Next.js `instrumentation.ts` | 진입점 아님 | `register()`는 프로세스당 한 번 실행됩니다. `onRequestError(err, request, ctx)`는 파일이 아니라 `request` / `ctx` 이름 휴리스틱으로 잡힙니다. |
+| Remix / React Router (framework mode) | 첫 파라미터가 `request`, `params`, `context`를 구조 분해하는 export된 `loader` / `action`(`export async function loader({ request, params }) …`) | 구조 분해된 파라미터도 분석기에는 일반 파라미터이므로 안에서의 `request.url`은 `high`입니다. 그런 파라미터가 없는 export된 `loader`는 건드리지 않습니다. `clientLoader` / `clientAction`은 진입점이 아닙니다. |
+| 모든 Node 서버 코드 (Express, Fastify, Koa, Hono, Nitro, Vite SSR, 직접 만든 `server.ts`) | 진입점 없음; 오염 **이름 휴리스틱**이 적용됩니다: `req`, `request`, `ctx`, `context`(그리고 요청스러운 멤버를 읽는 `params`, `searchParams`, `event`)에 대한 프로퍼티 읽기는 어디서든 요청 프리미티브라서 `(req, res) => { last = req.headers.host }`는 R4 `high` | 자기 이름(`c.req`, `getSession()`)은 설정의 `taintSources.identifiers` / `taintSources.functions`로 확장하세요. 파라미터 이름이 `foo`인 핸들러는 `medium`입니다. |
+| Nuxt / SvelteKit / Astro / Vue SFC / Angular | 미지원 | `.vue`, `.svelte`, `.astro` 파일은 파싱하지 않습니다. 그런 프로젝트의 순수 `.ts` 서버 유틸리티는 이름 휴리스틱만으로 분석됩니다. |
+
+### HTTP 클라이언트
+
+| 형태 | R1 / R2 / R3 |
+| --- | --- |
+| `import axios from 'axios'`, `import * as axios from 'axios'`(`axios.default.defaults`), `import axios = require('axios')`, `const axios = require('axios')` | 예 |
+| `axios.create(…)`, `import { create } from 'axios'` / `const { create } = require('axios')`의 `create(…)` — 모듈 레벨 바인딩에 대입된 경우 | 예 |
+| 다른 모듈에서 import한 인스턴스(`import { api } from './client'`) | `api.defaults.headers…` → R1; `api.interceptors.request.use(…)` → R3; `api.defaults.baseURL = …` → 값이 오염됐으면 R4, 아니면 R5(`--all`) |
+| 함수 안에서 만든 인스턴스(핸들러 안의 `const api = axios.create()`) | 발견 아님(요청별 인스턴스) |
+| 나중에 대입되는 모듈 레벨 `let`의 인스턴스(`let api; function init() { api = axios.create() }`) | 대입은 R4/R5; 이후의 `api.defaults` 쓰기는 R1이 아님 |
+| `axios-retry`, `interceptors.eject`, `interceptors.clear` | `axiosRetry(axios, …)`는 일반 호출(발견 아님). 같은 함수에서 등록하고 eject하는 인터셉터는 R3가 아닙니다. |
+| `ky`, `got`, `superagent`, `fetch` 래퍼, `ofetch`, GraphQL 클라이언트 | HTTP 클라이언트로 인식하지 않습니다. 그 모듈 레벨 인스턴스에 대한 쓰기는 여전히 R4(오염)/R5라서 `k.defaults = req.x`는 보고되지만, "요청마다 인스턴스 생성"은 이해하지 못합니다. |
+
+### 언어, 문법, 파일
+
+- **확장자**: `.ts`, `.tsx`, `.js`, `.jsx`, `.mjs`, `.cjs`. `.d.ts`는 건너뜁니다. `.js`는 JSX를 켠 채로
+  파싱하므로(TypeScript 파서의 JS 모드) `.js` 안의 React 코드도 동작합니다.
+- **문법**: TypeScript 5.x가 파싱하는 전부 — 데코레이터(legacy·표준), `satisfies`, `using`, `enum` / `namespace`,
+  클래스 필드와 `accessor`, `export =`, `import x = require()`, CommonJS `module.exports`. Flow, Vue/Svelte/Astro
+  단일 파일 컴포넌트는 안 됩니다.
+- **문법 오류**가 있어도 실행은 멈추지 않습니다. TypeScript 파서가 복구하며, 파싱된 데까지 분석하고 `parse-error`
+  진단을 보고합니다("실패하는 방식" 참고).
+- **모듈 시스템**: ESM과 CommonJS. `require('axios')`, `const { create } = require('axios')`를 인식합니다. 동적
+  `import()` 결과는 추적하지 않습니다.
+- **설정 파일**: `--root`의 `ssr-leak.config.json` / `.mjs` / `.js` / `.cjs`(먼저 찾은 것), 또는 `--config <path>`.
+  키: `ignore`, `exclude`, `include`(glob / 디렉터리 이름 문자열 배열), `taintSources`(`{ functions?, identifiers? }`),
+  `guards`(`{ server?, client? }`). 그 외 키는 설정 오류(종료 코드 2)입니다.
+- **런타임**: Node 20, 22, 24(CI는 20과 22, 개발은 24). Windows는 테스트하지 않았습니다 — 내부에서 경로를 `/`로
+  정규화하지만 거기서 도는 CI 작업은 없습니다.
+- **규모**: 노트북에서 약 13,600개 파일을 4–5초, RSS 약 260 MB(대형 모노레포, 단일 스레드, 파서만, 타입 체커
+  없음). 파일을 하나씩 읽고 파싱하므로 메모리는 발견 목록 외에는 트리 크기에 비례해 늘지 않습니다.
+
+### 탐지하는 것 / 못 하는 것
+
+탐지(정확한 형태는 "규칙" 참고): 모듈 초기화가 아닌 함수 안에서의 `<axios>.defaults.*`,
+`<axios>.interceptors.*.use()`, 모듈 레벨 `let` / `var` 재대입, 모듈 레벨 바인딩의 프로퍼티 대입, 모듈 레벨
+`Map` / `Set` / `Array` 리터럴에 대한 `set/add/push/…`, `Object.assign(moduleObject, …)`, `globalThis.*` /
+`global.*` / `process.env.*` 쓰기 — 쓰인 값의 오염 출처와 함께.
+
+미탐지: **다른 모듈**을 거치는 누수(setter를 export하는 `store.ts` — 그 파일을 분석하세요; 쓰기 지점이 구문상
+보여야 합니다), 모듈 스코프에 저장된 클로저, 모듈 스코프에 저장되고 `this`로 변경되는 클래스 인스턴스, 팩토리가
+만든 컬렉션(`const cache = createLRU()`), 나중에 axios 인스턴스가 대입되는 모듈 레벨 `let`, 최상위
+`app.use(…)`로 등록된 함수(모듈 초기화로 취급), `--include-client` 없는 `'use client'` 파일. "알려진 미탐" 참고.
+
+### 실패하는 방식
+
+CLI는 입력 문제에 스택 트레이스를 찍지 않으며, 모든 메시지는 stderr 한 줄입니다. 깨끗한 실행이 오해를 부를 만한
+상황은 전부 종료 코드 2입니다.
+
+| 종료 | 조건 | stderr (접두사) |
+| --- | --- | --- |
+| 2 | 알 수 없는 옵션 / 잘못된 값 | `error: Unknown option '--x'`, `error: --fail-on must be one of high, medium, low, none (got "x")` |
+| 2 | 설정 파일 문제 | `error: config file not found: <path>`, `error: <file>: invalid JSON (…)`, `error: <file>: failed to load (…)`, `error: <file>: unknown key(s) a, b`, `error: <file>: "ignore" must be string[]`, `error: <file>: "taintSources.functions" must be string[]`, `error: <file>: "guards.server" must be string[]` |
+| 2 (`--allow-empty`면 0) | 지정한 경로가 없음 | `error: path not found: <pattern> (relative to <root>)` (`missing-path`) |
+| 2 (`--allow-empty`면 0) | 분석한 파일이 없음 | `error: no files to analyze: <patterns> matched nothing under <root>` (`empty-input`) |
+| 2 (`--allow-empty`면 0) | 분석한 모든 파일에 문법 오류 | `error: no file parsed cleanly: all N analyzed file(s) under <root> have syntax errors` (`empty-input`) |
+| 2 | 찾은 파일을 읽을 수 없음 | `error: cannot read <file>: EACCES` (`unreadable-file`) |
+| 변화 없음 | 한 파일에 문법 오류가 있지만 다른 파일은 파싱됨 | `warning: syntax error in <file>:<line>:<col>: <message> (+N more); analyzed as far as it parsed` (`parse-error`) |
+| 2 | 예기치 않은 예외 | `error: <stack>` — `--env` 출력과 함께 제보해 주세요 |
+
+모든 진단은 `report.diagnostics`(`--json`)에도 `kind`와 함께 들어갑니다. 압축 파일(`*.min.js`, 2000자를 넘는
+줄)과 `'use client'` 파일은 조용히 건너뜁니다 — 직접 지정하거나 `include` / `--include-client`를 쓰세요.
+
+`ssr-leak --env`는 제보에 필요한 정보를 출력하고 0으로 종료합니다(설정 파일이 잘못됐으면 2):
+
+```
+ssr-leak: 0.2.0
+node: v22.12.0 (linux x64)
+typescript: 5.9.3
+root: /work/app
+config file: /work/app/ssr-leak.config.json
+default pattern: **/*.{ts,tsx,js,jsx,mjs,cjs}
+excluded directories: node_modules, dist, build, out, .next, .vercel, .output, .turbo, .cache, .git, coverage, storybook-static, public, mocks, __mocks__
+config ignore: (none)
+config include: (none)
+server guards: isServer, isSSR, isServerSide
+client guards: isClient, isBrowser, isClientSide, canUseDOM
+taint functions: headers, cookies, draftMode, getServerSession
+taint identifiers: req, request, ctx, context, params, searchParams, event
+rules:
+  R1 axios-defaults-in-function [high]
+  R2 axios-defaults-at-module-scope [low, --all only]
+  R3 axios-interceptor-in-request-path [high]
+  R4 module-state-write-tainted [high]
+  R5 module-state-write-untainted [low, --all only]
+  R6 global-object-write [medium]
+```
+
 ## CLI 옵션
 
 | 옵션 | 설명 |
@@ -101,6 +210,7 @@ pnpm ssr-leak src app pages lib
 | `--config <path>` | 설정 파일. `--root` 기준으로 해석. 기본: `--root`의 `ssr-leak.config.{json,mjs,js,cjs}`(있을 때). |
 | `--fail-on <level>` | `high`(기본), `medium`, `low` 이상 발견이 하나라도 있으면 종료 코드 1; `none`은 절대 실패하지 않음. |
 | `--allow-empty` | 분석한 파일이 없거나 지정한 경로가 없을 때 2 대신 0으로 종료. |
+| `--env` | 제보용 환경 정보(버전, root, 설정 파일, 기본값, 규칙 목록)를 출력하고 0으로 종료. |
 | `-h, --help` / `-v, --version` | 도움말 / 버전. |
 
 ## 규칙
@@ -126,8 +236,11 @@ pnpm ssr-leak src app pages lib
 `request`와 그 단수형); 그리고 인식된 SSR 진입점의 파라미터:
 `getServerSideProps`, `getStaticProps`, `getInitialProps`(래핑된 경우 포함: `export const getServerSideProps =
 withAuth(async (ctx) => …)`), export된 `GET`/`POST`/`PUT`/`PATCH`/`DELETE`/`HEAD`/`OPTIONS` 라우트 핸들러,
-export된 `middleware`, `pages/api/**` 파일의 default export, `app/**/page|layout|template.*`에서 파라미터를 받는
-default export 함수.
+export된 `middleware` / `proxy`(또는 `middleware.*` / `proxy.*` 파일의 default export), export된
+`generateMetadata` / `generateViewport`, Server Action(`'use server'` 파일의 export된 함수, 또는 `'use server'`로
+시작하는 함수), `{ request | params | context }`를 받는 Remix / React Router `loader` / `action`, `pages/api/**`
+파일의 default export, `app/**/page|layout|template|default.*`에서 파라미터를 받는 default export 함수. 전체
+표는 "요구 사항 & 호환성"에 있습니다.
 
 ### 억제
 
@@ -225,8 +338,8 @@ src/lib/store.ts:4:3  R4 module-state-write-tainted [medium]  Possible per-reque
 ```
 
 `file`은 `root` 기준 상대 경로(`/` 구분자), `line`/`column`은 1부터 시작합니다. `diagnostics`는 입력 문제
-목록입니다(`{ "kind": "missing-path" | "empty-input" | "unreadable-file", "path"?, "message" }`); CLI는 이를
-stderr에도 출력합니다. 형식은 메이저 버전 안에서 안정적이며 필드가 추가될 수는 있습니다.
+목록입니다(`{ "kind": "missing-path" | "empty-input" | "unreadable-file" | "parse-error", "path"?, "message" }`);
+CLI는 이를 stderr에도 출력합니다(`parse-error`는 경고이며 종료 코드를 바꾸지 않습니다). 형식은 메이저 버전 안에서 안정적이며 필드가 추가될 수는 있습니다.
 
 ## 종료 코드
 
@@ -234,9 +347,11 @@ stderr에도 출력합니다. 형식은 메이저 버전 안에서 안정적이�
 | --- | --- |
 | 0 | `--fail-on` 이상의 발견 없음 |
 | 1 | `--fail-on`(기본 `high`) 이상의 발견이 하나 이상 |
-| 2 | 사용법 또는 설정 오류(알 수 없는 옵션, 잘못된 `--fail-on`, 잘못되거나 없는 설정 파일); 존재하지 않는 경로 지정 또는 빈 입력 집합(`--allow-empty`가 없을 때); 읽을 수 없는 파일 |
+| 2 | 사용법 또는 설정 오류(알 수 없는 옵션, 잘못된 `--fail-on`, 잘못되거나 없는 설정 파일); 존재하지 않는 경로 지정, 빈 입력 집합, 또는 분석한 모든 파일에 문법 오류(`--allow-empty`가 없을 때); 읽을 수 없는 파일 |
 
-종료 코드 2로 끝나는 오류는 스택 트레이스 없이 stderr에 한 줄로 출력됩니다.
+종료 코드 2로 끝나는 오류는 스택 트레이스 없이 stderr에 한 줄로 출력됩니다. 문법 오류가 있는 파일은 파싱된
+데까지 분석하고 `warning:`으로 출력하며, 그것만으로는 종료 코드가 바뀌지 않습니다. 정확한 메시지는 "실패하는
+방식"에 있습니다.
 
 ## 프로그래밍 API
 
@@ -277,7 +392,9 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 
 전부 구문 분석 + 작은 바인더입니다. 타입 체커, `tsconfig`, 파일 간 해석은 없습니다.
 
-1. **파싱**: `ts.createSourceFile`(확장자로 스크립트 종류 결정; `.js`/`.mjs`/`.cjs`는 JS, `.jsx`/`.tsx`는 JSX).
+1. **파싱**: `ts.createSourceFile`(확장자로 스크립트 종류 결정; `.js`/`.mjs`/`.cjs`는 JSX를 켠 JS, `.jsx`/`.tsx`는
+   JSX). 파서는 오류에 관대합니다: 문법 오류가 있는 파일은 파싱된 데까지 분석하고 첫 오류 위치와 함께
+   `parse-error` 진단으로 보고합니다.
 2. **파일 게이트**: 첫 문장 앞에 `ssr-leak-disable` 주석이 있거나, 디렉티브 프롤로그에 `'use client'`가 있으면
    (`--include-client`가 아닌 한) 건너뜁니다 — Client Component도 서버에서 렌더링되므로 이 게이트는 소음만
    줄입니다. 테스트·스토리 파일, 제외 디렉터리, 압축 파일은 탐색 단계에서 빠집니다.
@@ -288,7 +405,8 @@ export합니다. CLI는 `run()`의 얇은 래퍼입니다.
 4. **함수 스코프**: 함수형 노드(선언, 표현식, 화살표, 메서드, 접근자, 생성자)마다 파라미터 이름, 본문에서 선언된
    이름, 각 로컬에 대입된 모든 표현식(초기화식, `=`, 구조 분해, `for…of` 소스)을 가진 스코프를 만듭니다. 블록은
    따로 모델링하지 않아, 함수 본문 어디서든 선언된 이름은 그 함수의 로컬입니다. 이 부정확함은 발견을 **줄이는**
-   방향입니다. 스코프에는 그 함수가 인식된 SSR 진입점인지도 기록합니다.
+   방향입니다. 스코프에는 그 함수가 인식된 SSR 진입점인지도 기록합니다(바인딩된 이름과 export 형태, default
+   export는 파일 경로, 또는 `'use server'` 디렉티브 — "요구 사항 & 호환성" 참고).
 5. **이름 해석**: 식별자는 가장 안쪽 함수 스코프부터 바깥으로, 다음 모듈 스코프, 아니면 "미해석"(`globalThis`,
    `process`, `Object`, 선언되지 않은 전역)으로 해석합니다.
 6. **요청 경로**: 노드를 감싸는 함수가 하나 이상 있고, 그중 어느 것도 *모듈 초기화*가 아닐 때 "요청 경로에

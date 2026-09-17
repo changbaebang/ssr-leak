@@ -44,8 +44,11 @@ export interface FnScope {
   /**
    * A recognized SSR entry point whose parameters are request data: `getServerSideProps`,
    * `getStaticProps`, `getInitialProps`, exported `GET`/`POST`/… route handlers, exported
-   * `middleware`, a default export in `pages/api/**`, or a default export in
-   * `app/**\/(page|layout|template).*`.
+   * `middleware` / `proxy` (or the default export of `middleware.*` / `proxy.*`), exported
+   * `generateMetadata` / `generateViewport`, a Remix / React Router `loader` / `action` taking
+   * `{ request | params | context }`, a Server Action (`'use server'` at file level and exported,
+   * or as the function's first statement), a default export in `pages/api/**`, or a default
+   * export in `app/**\/(page|layout|template|default).*`.
    */
   isSsrEntry: boolean;
 }
@@ -242,7 +245,11 @@ const EFFECT_HOOKS = new Set(['useEffect', 'useLayoutEffect', 'useInsertionEffec
 
 /** Next.js data-fetching functions; request data flows in through their parameters. */
 const SSR_ENTRY_NAMES = new Set(['getServerSideProps', 'getStaticProps', 'getInitialProps']);
-/** Entry points that only count when exported: route handlers and middleware. */
+/**
+ * Entry points that only count when exported: route handlers, `middleware` / `proxy` (Next 16
+ * renamed the file and function to `proxy`), and the App Router metadata functions, which run
+ * per request on dynamic routes.
+ */
 const SSR_EXPORTED_ENTRY_NAMES = new Set([
   'GET',
   'POST',
@@ -252,9 +259,49 @@ const SSR_EXPORTED_ENTRY_NAMES = new Set([
   'HEAD',
   'OPTIONS',
   'middleware',
+  'proxy',
+  'generateMetadata',
+  'generateViewport',
 ]);
+/**
+ * Remix / React Router data functions: `loader({ request, params, context })` and
+ * `action({ request, params, context })`. Only an exported function whose first parameter
+ * destructures one of those names counts, so an unrelated `export const loader` is left alone.
+ */
+const ROUTE_DATA_FUNCTION_NAMES = new Set(['loader', 'action']);
+const ROUTE_DATA_PARAM_NAMES = new Set(['request', 'params', 'context']);
 const PAGES_API_FILE = /(^|\/)pages\/api\//;
-const APP_ENTRY_FILE = /(^|\/)app\/(.*\/)?(page|layout|template)\.[cm]?[jt]sx?$/;
+const APP_ENTRY_FILE = /(^|\/)app\/(.*\/)?(page|layout|template|default)\.[cm]?[jt]sx?$/;
+/** `middleware.ts` / `proxy.ts` at the project (or `src/`) root: the default export is the handler. */
+const MIDDLEWARE_FILE = /(^|\/)(middleware|proxy)\.[cm]?[jt]s$/;
+
+/** `'use server'` as the first statement of a body: a Server Action / Server Function. */
+function startsWithUseServer(statements: readonly ts.Statement[]): boolean {
+  for (const s of statements) {
+    if (!ts.isExpressionStatement(s) || !ts.isStringLiteralLike(s.expression)) return false;
+    if (s.expression.text === 'use server') return true;
+  }
+  return false;
+}
+
+/** File-level `'use server'` directive: every exported function is a Server Function. */
+export function isServerActionFile(sf: ts.SourceFile): boolean {
+  return startsWithUseServer(sf.statements);
+}
+
+function isServerActionFunction(fn: FunctionLike): boolean {
+  return fn.body !== undefined && ts.isBlock(fn.body) && startsWithUseServer(fn.body.statements);
+}
+
+function isRouteDataFunction(fn: FunctionLike, site: BindingSite): boolean {
+  if (!site.exported || !site.name || !ROUTE_DATA_FUNCTION_NAMES.has(site.name)) return false;
+  const first = fn.parameters[0];
+  if (!first || !ts.isObjectBindingPattern(first.name)) return false;
+  return first.name.elements.some((el) => {
+    const key = el.propertyName ?? el.name;
+    return ts.isIdentifier(key) && ROUTE_DATA_PARAM_NAMES.has(key.text);
+  });
+}
 
 /**
  * Collects callee identifiers invoked (`f()`) or instantiated (`new C()`) by top-level statements
@@ -497,14 +544,18 @@ function bindingSiteOf(fn: FunctionLike): BindingSite | null {
 }
 
 function isSsrEntryFunction(fn: FunctionLike, depth: number): boolean {
+  // A function-level `'use server'` directive marks a Server Action at any nesting depth.
+  if (isServerActionFunction(fn)) return true;
   if (depth !== 0) return false;
   const site = bindingSiteOf(fn);
   if (!site) return false;
   if (site.name && SSR_ENTRY_NAMES.has(site.name)) return true;
   if (site.name && site.exported && SSR_EXPORTED_ENTRY_NAMES.has(site.name)) return true;
+  if (isRouteDataFunction(fn, site)) return true;
+  if (site.exported && isServerActionFile(fn.getSourceFile())) return true;
   if (site.isDefaultExport && fn.parameters.length > 0) {
     const file = fn.getSourceFile().fileName.replace(/\\/g, '/');
-    return PAGES_API_FILE.test(file) || APP_ENTRY_FILE.test(file);
+    return PAGES_API_FILE.test(file) || APP_ENTRY_FILE.test(file) || MIDDLEWARE_FILE.test(file);
   }
   return false;
 }

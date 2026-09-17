@@ -1,6 +1,6 @@
 import fs from 'node:fs';
 import path from 'node:path';
-import { analyzeSource } from './analyzer.js';
+import { analyzeSource, analyzeSourceDetailed } from './analyzer.js';
 import { resolveConfig } from './config.js';
 import { collectFilesDetailed, DEFAULT_PATTERN, isMinifiedSource, toPosix } from './files.js';
 import { CONFIDENCE_RANK } from './rules.js';
@@ -90,6 +90,7 @@ export async function run(options: RunOptions = {}): Promise<Report> {
 
   const findings: Finding[] = [];
   let filesScanned = 0;
+  let filesWithParseErrors = 0;
   for (const file of files) {
     const rel = toPosix(path.relative(root, file)) || path.basename(file);
     let code: string;
@@ -106,12 +107,28 @@ export async function run(options: RunOptions = {}): Promise<Report> {
     }
     if (!forced.has(file) && isMinifiedSource(code)) continue;
     filesScanned++;
-    findings.push(...analyzeSource(code, file, analyzeOptions).map((f) => ({ ...f, file: rel })));
+    const result = analyzeSourceDetailed(code, file, analyzeOptions);
+    if (result.parseError) {
+      filesWithParseErrors++;
+      const e = result.parseError;
+      const more = e.count > 1 ? ` (+${e.count - 1} more)` : '';
+      diagnostics.push({
+        kind: 'parse-error',
+        path: rel,
+        message: `syntax error in ${rel}:${e.line}:${e.column}: ${e.message}${more}; analyzed as far as it parsed`,
+      });
+    }
+    findings.push(...result.findings.map((f) => ({ ...f, file: rel })));
   }
   if (filesScanned === 0) {
     diagnostics.push({
       kind: 'empty-input',
       message: `no files to analyze: ${patterns.join(', ')} matched nothing under ${root}`,
+    });
+  } else if (filesWithParseErrors === filesScanned) {
+    diagnostics.push({
+      kind: 'empty-input',
+      message: `no file parsed cleanly: all ${filesScanned} analyzed file(s) under ${root} have syntax errors`,
     });
   }
   findings.sort((a, b) => a.file.localeCompare(b.file) || a.line - b.line || a.column - b.column);
