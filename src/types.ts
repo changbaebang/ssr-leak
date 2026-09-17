@@ -91,9 +91,17 @@ export type DiagnosticKind =
   /** No file was analyzed at all. */
   | 'empty-input'
   /** A discovered file could not be read. */
-  | 'unreadable-file';
+  | 'unreadable-file'
+  /**
+   * A file has syntax errors. It is still analyzed as far as it parsed; the CLI prints a warning
+   * and the exit code is unaffected unless every analyzed file had syntax errors.
+   */
+  | 'parse-error';
 
-/** A problem with the input set. The CLI prints these on stderr and exits 2. */
+/**
+ * A problem with the input set. The CLI prints these on stderr; every kind except `parse-error`
+ * makes it exit 2 (`missing-path` and `empty-input` only without `--allow-empty`).
+ */
 export interface Diagnostic {
   kind: DiagnosticKind;
   /** Path (relative to root, or the pattern as given) the diagnostic is about, when applicable. */

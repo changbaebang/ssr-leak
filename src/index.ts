@@ -1,4 +1,9 @@
-export { analyzeSource } from './analyzer.js';
+export {
+  analyzeSource,
+  analyzeSourceDetailed,
+  type ParseError,
+  type SourceAnalysis,
+} from './analyzer.js';
 export { findConfigFile, loadConfigFile, resolveConfig, validateConfig } from './config.js';
 export { EVIDENCE_NOTES, type EvidenceKind } from './evidence.js';
 export {
@@ -24,6 +29,7 @@ export {
 } from './guards.js';
 export { CONFIDENCE_RANK, RULE_LIST, RULES, type RuleMeta } from './rules.js';
 export { analyzeFile, run, shouldFail, summarize } from './run.js';
+export { isServerActionFile } from './scope.js';
 export { parseIgnoreRules } from './suppress.js';
 export {
   DEFAULT_TAINT_FUNCTIONS,
