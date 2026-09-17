@@ -1,6 +1,6 @@
 {
   "name": "ssr-leak",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "Static checker that catches module-scope state (axios.defaults, interceptors, module-level variables, globalThis) leaking between SSR requests in Next.js",
   "license": "MIT",
   "author": "Changbae Bang",

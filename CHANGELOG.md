@@ -4,6 +4,25 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.2.0] - 2026-09-17
+
+### Added
+
+- Positive-evidence downgrades: a request-path write is reported at `low` (with the reason in the message) when
+  it is a **dedupe set** (`add` guarded by `has` in the same function), an **argument-keyed cache** (`map.set(k, v)`
+  with only `k` weakly tainted), a **request-lifetime entry** (the same function also `delete`s it), or is
+  **preceded by an unconditional browser-only dereference** (`window.location`, `document`, `localStorage`, …,
+  which throws on the server). `navigator` / `self` are not browser-only. Exported: `EVIDENCE_NOTES`.
+
+### Changed
+
+- `params`, `searchParams` and `event` are now *weak* taint names when they are a parameter of a function that is
+  not an SSR entry point and the accessed member is not request-like (`searchParams.get('tab')` → `medium`;
+  `params.cookies`, `req.*`, entry-point parameters → still `high`). Exported: `WEAK_TAINT_IDENTIFIERS`,
+  `REQUEST_MEMBERS`.
+- On a large Next.js monorepo this took the default output from 6 high / 17 medium to 4 high / 10 medium with
+  every true positive kept.
+
 ## [0.1.0] - 2026-09-16
 
 Initial release.

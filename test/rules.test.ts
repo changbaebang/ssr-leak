@@ -104,11 +104,11 @@ describe('R3 axios-interceptor-in-request-path', () => {
 });
 
 describe('R4 module-state-write-tainted', () => {
-  it('flags a module-level let assigned from params', () => {
+  it('flags a module-level let assigned from params (medium: a weak name on a plain function)', () => {
     const findings = analyzeFixture('r4/positive-let-from-params.ts');
     expect(ruleIds(findings)).toEqual(['R4']);
-    expect(findings[0]).toMatchObject({ line: 4, confidence: 'high' });
-    expect(findings[0]?.message).toContain('parameter `params`');
+    expect(findings[0]).toMatchObject({ line: 4, confidence: 'medium' });
+    expect(findings[0]?.message).toContain('`params.id`');
   });
 
   it('flags cache.set(req.headers["x-user"], data)', () => {
@@ -227,9 +227,18 @@ describe('R4 confidence by taint provenance', () => {
     expect(findings.map((f) => [f.ruleId, f.confidence])).toEqual([['R4', 'high']]);
   });
 
-  it('keeps high confidence when the parameter is named like a request primitive', () => {
-    const findings = analyzeFixture('r4/positive-let-from-params.ts');
-    expect(findings[0]?.confidence).toBe('high');
+  it('treats params/searchParams/event as weak names unless the member or the function says otherwise', () => {
+    const rows = analyzeFixture('r4/positive-weak-name-boundary.ts').map((f) => [
+      f.line,
+      f.confidence,
+    ]);
+    expect(rows).toEqual([
+      [9, 'high'], // req.headers.cookie
+      [14, 'medium'], // params.id on a plain function
+      [19, 'high'], // params.cookies
+      [24, 'high'], // unresolved `params`
+      [29, 'high'], // SSR entry point
+    ]);
   });
 
   it('keeps high confidence for property reads on req/ctx and taint-source calls', () => {
