@@ -4,6 +4,18 @@ All notable changes to this project are documented here. The format follows
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) and the project uses
 [Semantic Versioning](https://semver.org/).
 
+## [0.3.0] - 2026-09-21
+
+### Changed
+
+- Release workflow publishes through npm trusted publishing without `registry-url` on `setup-node` (it wrote
+  an empty `_authToken` that made npm skip the OIDC exchange). No behaviour change for users.
+
+### Note
+
+- 0.2.0 was published from the `v0.2.1` tag (the `v0.2.0` release run failed before the workflow fix); there is
+  no 0.2.1 on npm. This release realigns tag and version.
+
 ## [0.2.0] - 2026-09-17
 
 ### Added
