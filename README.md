@@ -587,19 +587,16 @@ pnpm typecheck      # tsc --noEmit
 npm pack --dry-run  # verify the published file list
 ```
 
-Release: bump `version` in `package.json` and `CHANGELOG.md`, commit, then
-
-```sh
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+Release: bump `version` in `package.json` and update `CHANGELOG.md` **in a PR. Merging that PR to `main` is the
+release**: the `Release` workflow sees the version change, creates the `vX.Y.Z` tag itself and publishes. It only does
+so when the merge was performed by the repository owner; a collaborator's merge of a version bump is logged and skipped.
 
 The `Release` GitHub Action builds, tests, and runs `npm publish --provenance --access public` with npm **trusted publishing**: the workflow
 authenticates through its GitHub OIDC identity, so no npm token is stored anywhere. **Publish only through this tag → GitHub Actions flow; never run `npm publish`
 locally.** `publishConfig.registry` is pinned to `https://registry.npmjs.org/` so a local `~/.npmrc` pointing at
 a private registry cannot redirect an accidental publish.
-`v*` tags are protected by a repository ruleset: only the repository admin can create them, so a collaborator's
-write access cannot trigger a release.
+`v*` tags are protected by a repository ruleset that only lets GitHub Actions create them, so neither a collaborator's
+write access nor a hand-pushed tag can trigger a release.
 
 ## License
 

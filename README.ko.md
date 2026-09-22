@@ -565,19 +565,16 @@ pnpm typecheck      # tsc --noEmit
 npm pack --dry-run  # 배포 파일 목록 확인
 ```
 
-릴리스: `package.json`과 `CHANGELOG.md`의 `version`을 올리고 커밋한 뒤
-
-```sh
-git tag vX.Y.Z
-git push origin vX.Y.Z
-```
+릴리스: `package.json` 의 `version` 을 올리고 `CHANGELOG.md` 를 갱신해 **PR 로 올린다. 그 PR 을 `main` 에 병합하는 것이
+곧 릴리스다**: `Release` 워크플로가 버전 변경을 감지해 `vX.Y.Z` 태그를 직접 만들고 배포한다. 저장소 소유자가 병합했을
+때만 그렇게 하며, 협업자가 버전 범프를 병합하면 기록만 남기고 건너뛴다.
 
 `Release` GitHub Action이 빌드·테스트 후 npm **trusted publishing**(GitHub OIDC 신원, 토큰 저장 없음)으로
 `npm publish --provenance --access public`을 실행합니다. **배포는 이 태그 → GitHub Actions 흐름으로만 하고,
 로컬에서 `npm publish`를 실행하지 마세요.** `publishConfig.registry`가 `https://registry.npmjs.org/`로 고정되어
 있어 사설 레지스트리를 가리키는 로컬 `~/.npmrc`가 실수로 한 배포를 다른 곳으로 보내지 못합니다.
-`v*` 태그는 저장소 ruleset으로 보호되어 저장소 admin만 만들 수 있으므로, 협업자의 write 권한으로는 릴리스를
-트리거할 수 없습니다.
+`v*` 태그는 GitHub Actions만 만들 수 있도록 저장소 ruleset으로 보호되어, 협업자의 write 권한으로도 손으로 민 태그로도
+릴리스를 트리거할 수 없습니다.
 
 ## 라이선스
 
